@@ -3,9 +3,11 @@ Gemini API email generation logic.
 Constructs prompts per the spec and returns parsed JSON with subject + body.
 """
 
+import time
 import json
 import random
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from utils import extract_company_from_email
 
 
@@ -35,9 +37,9 @@ Your follow-up must:
 - Output format: Return ONLY a JSON object with two keys: "subject" and "body". No extra text."""
 
 
-def configure_api(api_key):
-    """Configure the Gemini API with the given key."""
-    genai.configure(api_key=api_key)
+def _get_client(api_key):
+    """Create a Gemini API client with the given key."""
+    return genai.Client(api_key=api_key)
 
 
 def generate_email(profile, recipient, campaign_goal, additional_context, api_key):
@@ -54,7 +56,7 @@ def generate_email(profile, recipient, campaign_goal, additional_context, api_ke
     Returns:
         dict with "subject" and "body" keys, or raises Exception
     """
-    configure_api(api_key)
+    # Client is created per-call in _call_gemini
 
     company = extract_company_from_email(recipient["email"])
     recipient_name = recipient.get("name") or "Unknown — address them naturally without a name"
@@ -97,7 +99,7 @@ def generate_followup(profile, original_subject, original_body, followup_context
     Returns:
         dict with "subject" and "body" keys
     """
-    configure_api(api_key)
+    # Client is created per-call in _call_gemini
 
     user_prompt = f"""Generate a follow-up email that will be sent as a reply to the email thread below.
 
@@ -124,28 +126,28 @@ Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}""
     return _call_gemini(FOLLOWUP_SYSTEM_PROMPT, user_prompt, api_key)
 
 
-def _call_gemini(system_prompt, user_prompt, api_key, retries=1):
+def _call_gemini(system_prompt, user_prompt, api_key, retries=4):
     """
     Call the Gemini API and parse the JSON response.
-    Retries once on parse failure.
+    Retries on parse failure or 503/UNAVAILABLE errors with exponential backoff.
     """
-    configure_api(api_key)
-
-    model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
-        system_instruction=system_prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.9,
-            response_mime_type="application/json",
-        ),
-    )
+    client = _get_client(api_key)
 
     last_error = None
-    for attempt in range(1 + retries):
+    for attempt in range(retries):
         try:
             # Add random seed variation for uniqueness
             seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
-            response = model.generate_content(user_prompt + seed_note)
+
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=user_prompt + seed_note,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.9,
+                    response_mime_type="application/json",
+                ),
+            )
 
             text = response.text.strip()
 
@@ -159,10 +161,17 @@ def _call_gemini(system_prompt, user_prompt, api_key, retries=1):
 
         except (json.JSONDecodeError, ValueError) as e:
             last_error = e
-            if attempt < retries:
+            if attempt < retries - 1:
                 continue
-            raise Exception(
-                f"Failed to parse Gemini response after {1 + retries} attempts: {e}"
-            )
+            raise Exception(f"Failed to parse Gemini response after {retries} attempts: {e}")
+            
         except Exception as e:
-            raise Exception(f"Gemini API error: {e}")
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                last_error = e
+                wait = 10 * (2 ** attempt)  # 10s, 20s, 40s, 80s
+                print(f"Gemini 503/UNAVAILABLE — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+            else:
+                raise # re-raise non-503 errors immediately
+
+    raise Exception(f"Gemini API unavailable/failed after {retries} retries. Try again later. Last error: {last_error}")
