@@ -5,7 +5,7 @@ export default function Settings() {
   const [form, setForm] = useState({
     gmail_address: '',
     gmail_app_password: '',
-    gemini_api_key: '',
+    groq_api_key: '',
     send_delay_seconds: 60,
   })
   const [hasPassword, setHasPassword] = useState(false)
@@ -23,7 +23,7 @@ export default function Settings() {
           send_delay_seconds: res.data.send_delay_seconds,
         }))
         setHasPassword(res.data.has_gmail_password)
-        setHasKey(res.data.has_gemini_key)
+        setHasKey(res.data.has_groq_key)
       })
       .catch(console.error)
   }, [])
@@ -46,7 +46,7 @@ export default function Settings() {
       await api.post('/settings', form)
       setFlash('Settings saved successfully!')
       if (form.gmail_app_password) setHasPassword(true)
-      if (form.gemini_api_key) setHasKey(true)
+      if (form.groq_api_key) setHasKey(true)
       setTimeout(() => setFlash(''), 3000)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save settings')
@@ -119,32 +119,32 @@ export default function Settings() {
           </p>
         </div>
 
-        {/* Gemini API Key */}
+        {/* Groq API Key */}
         <div>
-          <label htmlFor="gemini-key" className="block text-sm font-medium text-gray-700 mb-1">
-            Gemini API Key
+          <label htmlFor="groq-key" className="block text-sm font-medium text-gray-700 mb-1">
+            Groq API Key
             {hasKey ? (
               <span className="ml-2 text-green-600 text-xs">✓ Configured</span>
             ) : null}
           </label>
           <input
-            id="gemini-key"
+            id="groq-key"
             type="password"
-            name="gemini_api_key"
-            value={form.gemini_api_key}
+            name="groq_api_key"
+            value={form.groq_api_key}
             onChange={handleChange}
-            placeholder={hasKey ? '••••••••••••••••' : 'Enter your Gemini API key'}
+            placeholder={hasKey ? '••••••••••••••••' : 'Enter your Groq API key'}
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
           />
           <p className="mt-1 text-xs text-gray-500">
             Get a free API key at{' '}
             <a
-              href="https://aistudio.google.com"
+              href="https://console.groq.com/keys"
               target="_blank"
               rel="noopener noreferrer"
               className="text-indigo-600 hover:underline"
             >
-              aistudio.google.com
+              console.groq.com
             </a>
           </p>
         </div>

@@ -11,7 +11,7 @@ CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 DEFAULT_CONFIG = {
     "gmail_address": "",
     "gmail_app_password": "",
-    "gemini_api_key": "",
+    "groq_api_key": "",
     "send_delay_seconds": 60,
     "profile": {
         "name": "",
@@ -24,7 +24,8 @@ DEFAULT_CONFIG = {
         "linkedin": "",
         "bio": ""
     },
-    "resume_path": "uploads/resume.pdf"
+    "resume_path": "uploads/resume.pdf",
+    "resume_parsed": {}
 }
 
 
@@ -66,5 +67,5 @@ def is_settings_complete(config):
     return bool(
         config.get("gmail_address", "").strip()
         and config.get("gmail_app_password", "").strip()
-        and config.get("gemini_api_key", "").strip()
+        and config.get("groq_api_key", "").strip()
     )

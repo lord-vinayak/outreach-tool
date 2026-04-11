@@ -14,16 +14,20 @@ export default function Profile({ onSave }) {
     bio: '',
   })
   const [hasResume, setHasResume] = useState(false)
+  const [resumeParsed, setResumeParsed] = useState(null)
   const [flash, setFlash] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [uploading, setUploading] = useState(false)
+  const [parsing, setParsing] = useState(false)
+  const [showAnalysis, setShowAnalysis] = useState(false)
 
   useEffect(() => {
     api.get('/profile')
       .then((res) => {
         setForm((prev) => ({ ...prev, ...res.data.profile }))
         setHasResume(res.data.has_resume)
+        setResumeParsed(res.data.resume_parsed)
       })
       .catch(console.error)
   }, [])
@@ -70,16 +74,36 @@ export default function Profile({ onSave }) {
     formData.append('resume', file)
 
     try {
-      await api.post('/upload-resume', formData, {
+      const res = await api.post('/upload-resume', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
       setHasResume(true)
-      setFlash('Resume uploaded successfully!')
+      if (res.data.parsed) {
+        setResumeParsed(res.data.parsed)
+        setFlash('Resume uploaded and parsed successfully!')
+      } else {
+        setFlash('Resume uploaded successfully!')
+      }
       setTimeout(() => setFlash(''), 3000)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to upload resume')
     } finally {
       setUploading(false)
+    }
+  }
+
+  const handleReparse = async () => {
+    setError('')
+    setParsing(true)
+    try {
+      const res = await api.post('/resume/reparse')
+      setResumeParsed(res.data.parsed)
+      setFlash('Resume re-parsed successfully!')
+      setTimeout(() => setFlash(''), 3000)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to parse resume')
+    } finally {
+      setParsing(false)
     }
   }
 
@@ -156,6 +180,83 @@ export default function Profile({ onSave }) {
           {saving ? 'Saving...' : 'Save Profile'}
         </button>
       </form>
+
+      {/* Resume Analysis Section */}
+      {hasResume && (
+        <div className="mt-8 border-t border-gray-200 pt-8">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-xl font-bold text-gray-900">Resume Analysis</h2>
+            <button
+              onClick={handleReparse}
+              disabled={parsing}
+              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+            >
+              {parsing ? 'Parsing...' : '↻ Re-parse Resume'}
+            </button>
+          </div>
+
+          {!resumeParsed || Object.keys(resumeParsed).length === 0 ? (
+            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
+              <p className="text-sm text-yellow-700">
+                Resume has not been analyzed yet. Make sure your Groq API key is set in Settings, then click "Re-parse Resume".
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-2">Professional Summary</h3>
+                <p className="text-sm text-gray-600 italic">"{resumeParsed.summary}"</p>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <AnalysisCard title="Key Projects" items={resumeParsed.projects} type="project" />
+                <AnalysisCard title="Experience" items={resumeParsed.experience} type="experience" />
+              </div>
+
+              <div className="bg-white rounded-lg p-4 border border-gray-200">
+                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-2">Achievements & Skills</h3>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {resumeParsed.skills?.map((skill, i) => (
+                    <span key={i} className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-medium border border-indigo-100">
+                      {skill}
+                    </span>
+                  ))}
+                </div>
+                <ul className="space-y-1">
+                  {resumeParsed.achievements?.map((ach, i) => (
+                    <li key={i} className="text-sm text-gray-600 flex gap-2">
+                      <span className="text-indigo-400">•</span> {ach}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AnalysisCard({ title, items, type }) {
+  if (!items || items.length === 0) return null
+  
+  return (
+    <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
+      <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">{title}</h3>
+      <div className="space-y-3">
+        {items.map((item, i) => (
+          <div key={i} className="border-l-2 border-indigo-100 pl-3">
+            <h4 className="text-sm font-bold text-gray-800">
+              {type === 'project' ? item.title : `${item.role} @ ${item.organization}`}
+            </h4>
+            <p className="text-xs text-gray-500 mb-1">
+              {type === 'experience' && item.duration}
+            </p>
+            <p className="text-xs text-gray-600 line-clamp-2">{item.description}</p>
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

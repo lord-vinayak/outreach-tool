@@ -16,6 +16,7 @@ from db import init_db, get_db, query_db, execute_db
 from utils import parse_email_list
 from email_sender import send_email
 from ai_generator import generate_email, generate_followup
+from resume_parser import parse_resume
 
 app = Flask(__name__)
 CORS(app)
@@ -36,6 +37,7 @@ def get_profile():
     return jsonify({
         "profile": config.get("profile", {}),
         "is_complete": is_profile_complete(config),
+        "resume_parsed": config.get("resume_parsed", {}),
         "has_resume": os.path.exists(
             os.path.join(UPLOAD_FOLDER, "resume.pdf")
         ),
@@ -86,9 +88,43 @@ def upload_resume():
 
     config = load_config()
     config["resume_path"] = filepath
+    
+    # Trigger parsing automatically if Groq key exists
+    groq_api_key = config.get("groq_api_key", "")
+    if groq_api_key:
+        try:
+            parsed = parse_resume(filepath, groq_api_key)
+            config["resume_parsed"] = parsed
+        except Exception as e:
+            print(f"Resume parsing failed: {e}")
+            config["resume_parsed"] = {}
+    else:
+        config["resume_parsed"] = {}
+
     save_config(config)
 
-    return jsonify({"message": "Resume uploaded successfully"})
+    return jsonify({"message": "Resume uploaded successfully", "parsed": config["resume_parsed"]})
+
+
+@app.route("/api/resume/reparse", methods=["POST"])
+def reparse_resume():
+    config = load_config()
+    groq_api_key = config.get("groq_api_key", "")
+    resume_path = config.get("resume_path", os.path.join(UPLOAD_FOLDER, "resume.pdf"))
+    
+    if not groq_api_key:
+        return jsonify({"error": "Groq API key not configured. Go to Settings."}), 400
+    
+    if not os.path.exists(resume_path):
+        return jsonify({"error": "No resume uploaded yet"}), 400
+    
+    try:
+        parsed = parse_resume(resume_path, groq_api_key)
+        config["resume_parsed"] = parsed
+        save_config(config)
+        return jsonify({"success": True, "parsed": parsed})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ─── Settings Routes ─────────────────────────────────────────────────────────
@@ -100,7 +136,7 @@ def get_settings():
     return jsonify({
         "gmail_address": config.get("gmail_address", ""),
         "has_gmail_password": bool(config.get("gmail_app_password", "")),
-        "has_gemini_key": bool(config.get("gemini_api_key", "")),
+        "has_groq_key": bool(config.get("groq_api_key", "")),
         "send_delay_seconds": config.get("send_delay_seconds", 60),
         "is_complete": is_settings_complete(config),
     })
@@ -118,11 +154,11 @@ def save_settings():
         config["gmail_address"] = data["gmail_address"]
     if "gmail_app_password" in data and data["gmail_app_password"]:
         config["gmail_app_password"] = data["gmail_app_password"]
-    if "gemini_api_key" in data and data["gemini_api_key"]:
-        config["gemini_api_key"] = data["gemini_api_key"]
+    if "groq_api_key" in data and data["groq_api_key"]:
+        config["groq_api_key"] = data["groq_api_key"]
     if "send_delay_seconds" in data:
         delay = int(data["send_delay_seconds"])
-        config["send_delay_seconds"] = max(45, min(90, delay))
+        config["send_delay_seconds"] = max(20, min(90, delay))
 
     save_config(config)
     return jsonify({"message": "Settings saved successfully"})
@@ -227,8 +263,8 @@ def generate_campaign_emails(campaign_id):
     """Generate AI emails for all draft recipients in a campaign."""
     config = load_config()
 
-    if not config.get("gemini_api_key"):
-        return jsonify({"error": "Gemini API key not configured. Go to Settings."}), 400
+    if not config.get("groq_api_key"):
+        return jsonify({"error": "Groq API key not configured. Go to Settings."}), 400
 
     campaign = query_db(
         "SELECT * FROM campaigns WHERE id = ?", (campaign_id,), one=True
@@ -244,7 +280,8 @@ def generate_campaign_emails(campaign_id):
         return jsonify({"error": "No draft recipients to generate emails for"}), 400
 
     profile = config.get("profile", {})
-    api_key = config["gemini_api_key"]
+    api_key = config["groq_api_key"]
+    resume_parsed = config.get("resume_parsed", {})
     errors = []
 
     conn = get_db()
@@ -256,6 +293,7 @@ def generate_campaign_emails(campaign_id):
                 campaign_goal=campaign["goal"],
                 additional_context=campaign.get("additional_context", ""),
                 api_key=api_key,
+                resume_parsed=resume_parsed
             )
             conn.execute(
                 "UPDATE recipients SET subject = ?, email_body = ? WHERE id = ?",
@@ -263,7 +301,10 @@ def generate_campaign_emails(campaign_id):
             )
             conn.commit()
         except Exception as e:
-            errors.append({"email": r["email"], "error": str(e)})
+            err_msg = str(e)
+            errors.append({"email": r["email"], "error": err_msg})
+            if "daily rate limit" in err_msg.lower():
+                break
 
     conn.close()
 
@@ -321,8 +362,8 @@ def update_recipient(campaign_id, recipient_id):
 def regenerate_recipient_email(campaign_id, recipient_id):
     """Regenerate AI email for a single recipient."""
     config = load_config()
-    if not config.get("gemini_api_key"):
-        return jsonify({"error": "Gemini API key not configured"}), 400
+    if not config.get("groq_api_key"):
+        return jsonify({"error": "Groq API key not configured"}), 400
 
     campaign = query_db(
         "SELECT * FROM campaigns WHERE id = ?", (campaign_id,), one=True
@@ -341,7 +382,8 @@ def regenerate_recipient_email(campaign_id, recipient_id):
             recipient={"email": recipient["email"], "name": recipient["name"]},
             campaign_goal=campaign["goal"],
             additional_context=campaign.get("additional_context", ""),
-            api_key=config["gemini_api_key"],
+            api_key=config["groq_api_key"],
+            resume_parsed=config.get("resume_parsed", {})
         )
 
         conn = get_db()
@@ -484,8 +526,8 @@ def delete_campaign(campaign_id):
 def generate_followups(campaign_id):
     """Generate follow-up emails for sent recipients who haven't been followed up."""
     config = load_config()
-    if not config.get("gemini_api_key"):
-        return jsonify({"error": "Gemini API key not configured"}), 400
+    if not config.get("groq_api_key"):
+        return jsonify({"error": "Groq API key not configured"}), 400
 
     data = request.json or {}
     followup_context = data.get("context", "")
@@ -500,7 +542,8 @@ def generate_followups(campaign_id):
         return jsonify({"error": "No recipients eligible for follow-up"}), 400
 
     profile = config.get("profile", {})
-    api_key = config["gemini_api_key"]
+    api_key = config["groq_api_key"]
+    resume_parsed = config.get("resume_parsed", {})
     errors = []
 
     conn = get_db()
@@ -512,6 +555,7 @@ def generate_followups(campaign_id):
                 original_body=r["email_body"],
                 followup_context=followup_context,
                 api_key=api_key,
+                resume_parsed=resume_parsed
             )
             conn.execute(
                 "INSERT INTO followups (recipient_id, subject, email_body, status) VALUES (?, ?, ?, 'draft')",
@@ -519,7 +563,10 @@ def generate_followups(campaign_id):
             )
             conn.commit()
         except Exception as e:
-            errors.append({"email": r["email"], "error": str(e)})
+            err_msg = str(e)
+            errors.append({"email": r["email"], "error": err_msg})
+            if "daily rate limit" in err_msg.lower():
+                break
 
     conn.close()
 
