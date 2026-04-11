@@ -9,7 +9,7 @@ A personal email outreach tool that generates unique, human-sounding personalize
 - Python 3.11+
 - Node.js 18+
 - A Gmail account with 2-Step Verification enabled
-- A Gemini API key (free)
+- A Groq API key (free)
 
 ## Setup
 
@@ -41,11 +41,11 @@ Then open **http://localhost:5173** in your browser.
 4. Generate a new app password for "Mail"
 5. Copy the 16-character password and paste it in Settings
 
-## Getting a Gemini API Key
+## Getting a Groq API Key
 
-1. Go to [Google AI Studio](https://aistudio.google.com)
+1. Go to [Groq Console](https://console.groq.com/keys)
 2. Sign in with your Google account
-3. Click **Get API Key** → Create API key
+3. Click **Create API Key** 
 4. Copy the key and paste it in Settings
 
 ## Usage
@@ -62,6 +62,6 @@ Then open **http://localhost:5173** in your browser.
 | Layer | Technology |
 |---|---|
 | Backend | Python 3.11+, Flask, SQLite |
-| AI | Google Gemini API (gemini-1.5-flash) |
+| AI | Groq API |
 | Email | Gmail SMTP with App Password |
 | Frontend | React 18 (Vite) + Tailwind CSS v3 |
