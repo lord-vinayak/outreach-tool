@@ -78,8 +78,17 @@ def build_resume_highlights(resume_parsed: dict) -> str:
     lines = []
 
     projects = resume_parsed.get("projects", [])
+    projects = projects.copy()
+    random.shuffle(projects)
+
     if projects:
-        lines.append("PROJECTS (pick 1–2 most relevant to mention briefly):")
+        lines.append("""PROJECTS (listed in random order — evaluate ALL of them before choosing):
+Selection rule: Choose the project whose tech stack most closely matches this recipient's company domain.
+- If company is in AI/ML/healthcare → prefer Coeur AI
+- If company is in SaaS/ad-tech/marketing/e-commerce → prefer AdGenAI
+- If company is in research/education/NLP/data → prefer The Rigveda Project
+- If unclear → pick whichever has the most tech overlap with the job description
+Do NOT default to the first project listed. Actively reason about fit.""")
         for p in projects[:4]:  # max 4 projects passed to AI
             title = p.get("title", "")
             desc = p.get("description", "")
@@ -205,7 +214,7 @@ Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}""
     return _call_groq(FOLLOWUP_SYSTEM_PROMPT, user_prompt, api_key)
 
 
-def _call_groq(system_prompt, user_prompt, api_key, retries=4, model=GROQ_MODEL):
+def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama/llama-4-scout-17b-16e-instruct"):
     """
     Call the Groq API and parse the JSON response.
     Retries on rate limits or service unavailable.
@@ -244,12 +253,25 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model=GROQ_MODEL)
             
         except Exception as e:
             err_str = str(e).upper()
-            if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str:
-                # If we hit a daily limit on the heavy model, fallback to a lighter one
-                if model == GROQ_MODEL:
-                    print(f"Daily rate limit hit on {model}. Falling back to llama-3.1-8b-instant...")
-                    return _call_groq(system_prompt, user_prompt, api_key, retries, model="llama-3.1-8b-instant")
-                raise Exception(f"Groq daily rate limit reached on fallback model: {e}")
+            FALLBACK_MODELS = [
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "llama-3.3-70b-versatile",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]
+
+        if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
+            try:
+                current_index = FALLBACK_MODELS.index(model)
+            except ValueError:
+                current_index = -1
+
+            if current_index < len(FALLBACK_MODELS) - 1:
+                next_model = FALLBACK_MODELS[current_index + 1]
+                print(f"Rate limit hit on {model}. Trying next model: {next_model}...")
+                return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
+
+            raise Exception(f"All models exhausted due to rate limits. Try again later.")
                 
             if "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
                 last_error = e
