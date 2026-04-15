@@ -38,7 +38,107 @@ export function StatusBadge({ status }) {
   )
 }
 
-export default function ContactHistoryPanel({ email, isOpen, onClose }) {
+function InlineStatusEditor({ record, onSaveSuccess }) {
+  const [status, setStatus] = useState(record.reply_status || record.status || 'sent')
+  const [replyContent, setReplyContent] = useState(record.reply_content || '')
+  const [checkBackDate, setCheckBackDate] = useState(record.check_back_date || '')
+  const [isSaving, setIsSaving] = useState(false)
+  const [showSaved, setShowSaved] = useState(false)
+  
+  const originalStatus = record.reply_status || record.status || 'sent'
+  const originalReplyContent = record.reply_content || ''
+  const originalCheckBackDate = record.check_back_date || ''
+
+  const isChanged = 
+    status !== originalStatus ||
+    replyContent !== originalReplyContent ||
+    checkBackDate !== originalCheckBackDate
+
+  const handleSave = async () => {
+    setIsSaving(true)
+    try {
+      await api.patch(`/recipient/${record.id}/status`, {
+        reply_status: status,
+        reply_content: replyContent,
+        check_back_date: checkBackDate
+      })
+      
+      setShowSaved(true)
+      setTimeout(() => setShowSaved(false), 2000)
+      
+      if (onSaveSuccess) onSaveSuccess(record.id, status, replyContent, checkBackDate)
+    } catch (err) {
+      console.error(err)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const isExcluded = ['invalid_email', 'interview_scheduled', 'final_rejection'].includes(status)
+
+  return (
+    <div className="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-md">
+      <div className="flex items-center gap-2 mb-3">
+        <label className="text-xs font-semibold text-gray-700">Status:</label>
+        <select 
+          value={status} 
+          onChange={e => setStatus(e.target.value)}
+          className={`text-xs border-gray-300 rounded shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 py-1 pl-2 pr-6 ${statusColors[status] || 'bg-white'}`}
+        >
+          {Object.entries(statusLabels).map(([val, label]) => (
+            <option key={val} value={val}>{label}</option>
+          ))}
+        </select>
+        {isExcluded && (
+          <span className="text-[10px] text-gray-500 italic ml-2">
+            Excluded from future follow-ups
+          </span>
+        )}
+      </div>
+
+      <details className="group mb-3">
+        <summary className="text-xs font-medium text-indigo-600 hover:text-indigo-800 cursor-pointer list-none flex items-center">
+          <span className="mr-1 transform transition-transform group-open:rotate-180">▼</span> 
+          Paste their reply
+        </summary>
+        <div className="mt-2">
+          <textarea
+            className="w-full text-xs p-2 border border-gray-300 rounded focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none"
+            rows={3}
+            placeholder="Paste the email reply here..."
+            value={replyContent}
+            onChange={(e) => setReplyContent(e.target.value)}
+          />
+        </div>
+      </details>
+
+      {status === 'check_back' && (
+        <div className="flex items-center gap-2 mb-3">
+          <label className="text-xs font-medium text-gray-700">Check-back date:</label>
+          <input 
+            type="date" 
+            value={checkBackDate}
+            onChange={(e) => setCheckBackDate(e.target.value)}
+            className="text-xs border border-gray-300 rounded p-1 w-32 focus:border-indigo-500 outline-none"
+          />
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 mt-2 pt-2 border-t border-gray-200">
+        <button 
+          onClick={handleSave}
+          disabled={!isChanged || isSaving}
+          className="px-3 py-1 bg-indigo-600 text-white rounded text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+        >
+          {isSaving ? 'Saving...' : 'Save Changes'}
+        </button>
+        {showSaved && <span className="text-xs text-green-600 font-medium">✓ Saved</span>}
+      </div>
+    </div>
+  )
+}
+
+export default function ContactHistoryPanel({ email, isOpen, onClose, onStatusUpdated }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
   const panelRef = useRef(null)
@@ -137,19 +237,24 @@ export default function ContactHistoryPanel({ email, isOpen, onClose }) {
                     <span className="text-xs text-gray-500">
                       Sent: {new Date(record.sent_at).toLocaleDateString()}
                     </span>
-                    <StatusBadge status={record.reply_status || record.status} />
-                  </div>
-                  
-                  <div className="text-sm font-medium text-gray-900 mb-2">
-                    Subject: "{record.subject}"
                   </div>
 
-                  {record.reply_content ? (
-                    <div className="bg-amber-50 p-2 rounded text-sm text-gray-800 mb-2 border border-amber-100">
-                      <span className="font-bold text-amber-700">Reply: </span>
-                      <span className="whitespace-pre-line">{record.reply_content}</span>
-                    </div>
-                  ) : null}
+                  <InlineStatusEditor 
+                    record={record}
+                    onSaveSuccess={(id, newStatus, newContent, newDate) => {
+                      setData(prev => ({
+                        ...prev,
+                        history: prev.history.map(r => 
+                          r.id === id ? { ...r, reply_status: newStatus, reply_content: newContent, check_back_date: newDate } : r
+                        )
+                      }))
+                      if (onStatusUpdated) onStatusUpdated(id, newStatus)
+                    }}
+                  />
+                  
+                  <div className="text-sm font-medium text-gray-900 mt-3 mb-2">
+                    Subject: "{record.subject}"
+                  </div>
 
                   <div className="flex gap-4 text-xs mt-3">
                     <details className="group cursor-pointer">
