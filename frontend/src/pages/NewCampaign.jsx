@@ -1,6 +1,7 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
+import DuplicateWarning from '../components/DuplicateWarning'
 
 export default function NewCampaign() {
   const navigate = useNavigate()
@@ -14,9 +15,101 @@ export default function NewCampaign() {
   const [loading, setLoading] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [error, setError] = useState('')
+  
+  const [parsedEmails, setParsedEmails] = useState([])
+  const [duplicates, setDuplicates] = useState([])
+  const [skippedEmails, setSkippedEmails] = useState(new Set())
+  const [showWarning, setShowWarning] = useState(false)
+  const [parseSummary, setParseSummary] = useState('')
 
   const handleChange = (e) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
+  }
+
+  const extractEmails = (text) => {
+    const rawEmails = text.split(/[\n,]+/).map(s => s.trim()).filter(Boolean)
+    const emailRegex = /([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+)/gi
+    const validEmails = []
+    
+    rawEmails.forEach(str => {
+      const match = str.match(emailRegex)
+      if (match) {
+        validEmails.push({ email: match[0], raw: str })
+      }
+    })
+    return validEmails
+  }
+
+  const checkDuplicates = async (rawText) => {
+    const emails = extractEmails(rawText)
+    setParsedEmails(emails)
+    if (emails.length === 0) {
+       setParseSummary('')
+       setShowWarning(false)
+       return
+    }
+    
+    try {
+      const res = await api.post('/campaign/check-duplicates', {
+        emails: emails.map(e => e.email)
+      })
+      
+      const dups = res.data.duplicates || []
+      
+      if (dups.length > 0) {
+         setDuplicates(dups)
+         setShowWarning(true)
+      } else {
+         setShowWarning(false)
+      }
+      
+      updateSummary(emails.length, dups.length, 0)
+    } catch (err) {
+      console.error(err)
+    }
+  }
+
+  const updateSummary = (total, dupsCount, skippedCount) => {
+    const newCount = total - dupsCount
+    const included = dupsCount - skippedCount
+    setParseSummary(`✓ ${total} valid emails parsed · ${dupsCount} already contacted (${skippedCount} skipped, ${included} included) · ${newCount} new emails`)
+  }
+
+  const handleDecision = (email, action) => {
+    if (action === 'skip') {
+      const newSkipped = new Set(skippedEmails)
+      newSkipped.add(email)
+      setSkippedEmails(newSkipped)
+      
+      setForm(f => ({ ...f, email_list: f.email_list.split(/[\n,]+/).filter(l => !l.includes(email)).join('\n') }))
+      
+      setDuplicates(prev => prev.filter(d => d.email !== email))
+      updateSummary(parsedEmails.length, duplicates.length - 1, newSkipped.size)
+    } else if (action === 'include') {
+      setDuplicates(prev => prev.filter(d => d.email !== email))
+    }
+    
+    if (duplicates.length <= 1) setShowWarning(false)
+  }
+
+  const onSkipAll = () => {
+    const allDups = new Set([...skippedEmails, ...duplicates.map(d => d.email)])
+    setSkippedEmails(allDups)
+    
+    const dupEmailsList = duplicates.map(d => d.email)
+    setForm(f => ({ 
+      ...f, 
+      email_list: f.email_list.split(/[\n,]+/).filter(l => !dupEmailsList.some(e => l.includes(e))).join('\n')
+    }))
+    
+    setDuplicates([])
+    setShowWarning(false)
+    updateSummary(parsedEmails.length, 0, allDups.size)
+  }
+
+  const onIncludeAll = () => {
+    setDuplicates([])
+    setShowWarning(false)
   }
 
   const handleSubmit = async (e) => {
@@ -106,14 +199,34 @@ export default function NewCampaign() {
             name="email_list"
             value={form.email_list}
             onChange={handleChange}
+            onBlur={(e) => checkDuplicates(e.target.value)}
             required
             rows={6}
             placeholder={"john@company.com\njane.doe@startup.io, mark@techcorp.com\nAlice <alice@acme.com>\nBob Smith - bob@smith.com"}
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
           />
-          <p className="mt-1 text-xs text-gray-500">
-            Supports: one per line, comma-separated, space-separated, Name &lt;email&gt;, Name - email
-          </p>
+          
+          <div className="flex justify-between items-center mt-1">
+             <p className="text-xs text-gray-500">
+               Supports: one per line, comma-separated, space-separated, Name &lt;email&gt;, Name - email
+             </p>
+             <button type="button" onClick={() => checkDuplicates(form.email_list)} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium bg-indigo-50 px-2 py-1 rounded transition-colors border border-indigo-100">Check Duplicates</button>
+          </div>
+          
+          {parseSummary ? (
+            <div className="mt-3 text-xs font-medium text-emerald-700 bg-emerald-50 px-3 py-2 rounded-md border border-emerald-100 flex items-center gap-1.5">
+               {parseSummary}
+            </div>
+          ) : null}
+
+          {showWarning && duplicates.length > 0 && (
+            <DuplicateWarning 
+              duplicates={duplicates} 
+              onSkipAll={onSkipAll} 
+              onIncludeAll={onIncludeAll} 
+              onPerRecipientDecision={handleDecision} 
+            />
+          )}
         </div>
 
         {/* Campaign Goal */}

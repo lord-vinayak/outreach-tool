@@ -7,6 +7,7 @@ import Profile from './pages/Profile'
 import Settings from './pages/Settings'
 import NewCampaign from './pages/NewCampaign'
 import Preview from './pages/Preview'
+import Search from './pages/Search'
 import SendProgress from './pages/SendProgress'
 import Campaigns from './pages/Campaigns'
 import CampaignDetail from './pages/CampaignDetail'
@@ -54,6 +55,7 @@ export default function App() {
               profileComplete ? <NewCampaign /> : <Navigate to="/profile" replace />
             }
           />
+          <Route path="/search" element={profileComplete ? <Search /> : <Navigate to="/profile" replace />} />
           <Route path="/campaign/:campaignId/preview" element={<Preview />} />
           <Route path="/campaign/:campaignId/send" element={<SendProgress />} />
           <Route path="/campaign/:campaignId/followup/preview" element={<Preview isFollowUp />} />

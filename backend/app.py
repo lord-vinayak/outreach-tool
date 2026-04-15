@@ -838,6 +838,179 @@ def dashboard():
     return jsonify({"stats": stats, "recent_campaigns": recent})
 
 
+# ─── CRM Search Routes ──────────────────────────────────────────────────────────
+
+import urllib.parse
+
+@app.route("/api/search", methods=["GET"])
+def search_global():
+    query = request.args.get("q", "").strip()
+    if not query or len(query) < 2:
+        return jsonify({"results": [], "total": 0, "page": 1, "limit": 20, "pages": 0})
+        
+    status = request.args.get("status")
+    days = request.args.get("days")
+    campaign_id = request.args.get("campaign_id")
+    page = int(request.args.get("page", 1))
+    limit = int(request.args.get("limit", 20))
+    
+    q = f"%{query.lower()}%"
+    offset = (page - 1) * limit
+
+    base_sql = """
+        SELECT
+            r.id,
+            r.email,
+            r.name,
+            c.name as campaign_name,
+            r.reply_status,
+            r.reply_content,
+            r.check_back_date,
+            r.follow_up_sent,
+            r.sent_at,
+            r.subject,
+            r.email_body,
+            r.status as send_status,
+            r.error_message,
+            c.id as campaign_id,
+            c.goal as campaign_goal,
+            c.created_at as campaign_created_at
+        FROM recipients r
+        JOIN campaigns c ON r.campaign_id = c.id
+        WHERE (
+            LOWER(r.email) LIKE ?
+            OR LOWER(r.name) LIKE ?
+            OR LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1)) LIKE ?
+        )
+    """
+
+    params = [q, q, q]
+
+    if status and status != "all":
+        base_sql += " AND r.reply_status = ?"
+        params.append(status)
+
+    if days:
+        base_sql += " AND r.sent_at >= datetime('now', ?)"
+        params.append(f"-{days} days")
+
+    if campaign_id:
+        base_sql += " AND r.campaign_id = ?"
+        params.append(campaign_id)
+
+    count_sql = f"SELECT COUNT(*) as cnt FROM ({base_sql})"
+    count_res = query_db(count_sql, params, one=True)
+    total_count = count_res["cnt"] if count_res else 0
+
+    base_sql += " ORDER BY r.sent_at DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    
+    results = query_db(base_sql, params)
+
+    return jsonify({
+        "results": results,
+        "total": total_count,
+        "page": page,
+        "limit": limit,
+        "pages": (total_count + limit - 1) // limit
+    })
+
+
+@app.route("/api/contact/<path:email>", methods=["GET"])
+def contact_history(email):
+    email = urllib.parse.unquote(email)
+    domain = email.split("@")[-1] if "@" in email else ""
+    
+    history = query_db("""
+        SELECT r.*, c.name as campaign_name 
+        FROM recipients r
+        JOIN campaigns c ON r.campaign_id = c.id
+        WHERE r.email = ?
+        ORDER BY r.sent_at DESC
+    """, (email,))
+    
+    for h in history:
+        f = query_db("SELECT * FROM followups WHERE recipient_id = ? ORDER BY sent_at DESC LIMIT 1", (h["id"],), one=True)
+        if f:
+            h["follow_up_body"] = f["email_body"]
+            h["follow_up_sent_at"] = f["sent_at"]
+        else:
+            h["follow_up_body"] = None
+            h["follow_up_sent_at"] = None
+
+    same_domain = query_db("""
+        SELECT r.email, c.name as campaign_name, r.sent_at, r.reply_status
+        FROM recipients r
+        JOIN campaigns c ON r.campaign_id = c.id
+        WHERE SUBSTR(r.email, INSTR(r.email, '@') + 1) = ? AND r.email != ?
+        ORDER BY r.sent_at DESC
+    """, (domain, email))
+    
+    return jsonify({
+        "email": email,
+        "resolved_name": history[0]["name"] if history and history[0].get("name") else None,
+        "domain": domain,
+        "company": domain.split(".")[0].capitalize() if domain else None,
+        "total_contacts": len(history),
+        "history": history,
+        "same_domain_contacts": same_domain
+    })
+
+@app.route("/api/campaign/check-duplicates", methods=["POST"])
+def check_duplicates():
+    data = request.json or {}
+    emails = data.get("emails", [])
+    
+    if not emails:
+        return jsonify({"duplicates": [], "new_emails": [], "duplicate_count": 0, "new_count": 0})
+        
+    placeholders = ",".join("?" for _ in emails)
+    
+    duplicates_res = query_db(f"""
+        SELECT r.email, MAX(r.sent_at) as last_contacted, c.name as campaign_name, c.id as campaign_id, r.reply_status, COUNT(*) as times_contacted
+        FROM recipients r
+        JOIN campaigns c ON r.campaign_id = c.id
+        WHERE r.email IN ({placeholders})
+        GROUP BY r.email
+    """, emails)
+    
+    dup_emails = {d["email"] for d in duplicates_res}
+    new_emails = [e for e in emails if e not in dup_emails]
+    
+    return jsonify({
+        "duplicates": duplicates_res,
+        "new_emails": new_emails,
+        "duplicate_count": len(duplicates_res),
+        "new_count": len(new_emails)
+    })
+
+@app.route("/api/reengagement", methods=["GET"])
+def reengagement_candidates():
+    min_days = int(request.args.get("min_days", 14))
+    max_days = int(request.args.get("max_days", 60))
+    status_arg = request.args.get("status", "no_reply,check_back")
+    statuses = [s.strip() for s in status_arg.split(",")]
+    
+    placeholders = ",".join("?" for _ in statuses)
+    
+    query = f"""
+        SELECT r.email, r.name, r.sent_at, r.reply_status, c.name as campaign_name, c.id as campaign_id
+        FROM recipients r
+        JOIN campaigns c ON r.campaign_id = c.id
+        WHERE r.sent_at <= datetime('now', ?)
+        AND r.sent_at >= datetime('now', ?)
+        AND r.reply_status IN ({placeholders})
+        AND r.follow_up_sent = 0
+        AND r.exclude_followup = 0
+        ORDER BY r.sent_at DESC
+    """
+    
+    params = [f"-{min_days} days", f"-{max_days} days"] + statuses
+    candidates = query_db(query, params)
+    
+    return jsonify({"candidates": candidates})
+
+
 # ─── App Startup ──────────────────────────────────────────────────────────────
 
 

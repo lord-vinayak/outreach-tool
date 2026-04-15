@@ -71,6 +71,12 @@ def init_db():
             sent_at DATETIME,
             error_message TEXT
         );
+
+        CREATE INDEX IF NOT EXISTS idx_recipients_email ON recipients(email);
+        CREATE INDEX IF NOT EXISTS idx_recipients_domain ON recipients(email);
+        CREATE INDEX IF NOT EXISTS idx_recipients_sent_at ON recipients(sent_at);
+        CREATE INDEX IF NOT EXISTS idx_recipients_reply_status ON recipients(reply_status);
+        CREATE INDEX IF NOT EXISTS idx_recipients_campaign_id ON recipients(campaign_id);
     """)
     conn.commit()
     migrate_reply_status_columns(conn)
