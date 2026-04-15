@@ -174,6 +174,11 @@ export default function Preview({ isFollowUp = false }) {
                 <span className="text-sm text-gray-500 ml-2">
                   {item[emailKey]}
                 </span>
+                {isFollowUp && item.reply_status && (
+                  <span className="ml-3 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 capitalize">
+                    Context: {item.reply_status.replace(/_/g, ' ')}
+                  </span>
+                )}
               </div>
               {!isFollowUp ? (
                 <button

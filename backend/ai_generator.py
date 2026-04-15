@@ -8,7 +8,7 @@ import json
 import random
 import time
 from groq import Groq
-from utils import extract_company_from_email
+from utils import resolve_company_name
 
 GROQ_MODEL = "llama-3.3-70b-versatile"
 
@@ -118,7 +118,8 @@ def generate_email(profile, recipient, campaign_goal, additional_context, api_ke
     """
     Generate a unique cold outreach email for a single recipient.
     """
-    company = extract_company_from_email(recipient["email"])
+    domain = recipient["email"].split("@")[1]
+    company = resolve_company_name(domain, api_key)
     recipient_name = recipient.get("name") or "address them naturally without a explicit name if unknown"
     
     resume_block = build_resume_highlights(resume_parsed) if resume_parsed else "Not available."
@@ -212,6 +213,142 @@ Best,
 Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}"""
 
     return _call_groq(FOLLOWUP_SYSTEM_PROMPT, user_prompt, api_key)
+
+
+def generate_contextual_followup(profile, original_subject, original_body,
+                                  recipient_email, recipient_name,
+                                  reply_status, reply_content,
+                                  check_back_date, global_context,
+                                  api_key, resume_parsed=None):
+    """
+    Generate a context-aware follow-up email based on the recipient's reply status.
+    Each status produces a fundamentally different tone and intent.
+    """
+
+    domain = recipient_email.split("@")[1]
+    company = resolve_company_name(domain, api_key)
+    first_name = profile.get('name', '').split()[0] if profile.get('name') else 'Student'
+
+    greeting = f"Hi {recipient_name.split()[0].capitalize()}," if recipient_name else "Hi there,"
+
+    # Build status-specific instruction block
+    status_instructions = _build_status_instructions(
+        reply_status, reply_content, check_back_date, company
+    )
+
+    resume_block = build_resume_highlights(resume_parsed) if resume_parsed else "Not available."
+
+    system_prompt = f"""You are helping a college student write a follow-up email for an internship/job outreach.
+The follow-up must be tailored precisely to the situation described below — tone, length, and intent 
+must match the recipient's reply status exactly.
+
+GENERAL RULES:
+- Sound completely human — not automated, not templated
+- Never start with "I hope this email finds you well"
+- Never use "Dear Sir/Madam"
+- Use semi-formal tone throughout
+- Start with the exact greeting provided
+- End with: Best,\\n{first_name}
+- Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}"""
+
+    user_prompt = f"""Write a follow-up email for this specific situation.
+
+SITUATION:
+{status_instructions}
+
+ORIGINAL EMAIL:
+Subject: {original_subject}
+Body: {original_body}
+
+STUDENT PROFILE:
+- Name: {profile.get('name', '')}
+- College: {profile.get('college', '')}, {profile.get('year', '')}
+- Skills: {profile.get('skills', '')}
+- GitHub: {profile.get('github', 'Not provided')}
+
+RESUME HIGHLIGHTS (use only if directly relevant):
+{resume_block}
+
+RECIPIENT:
+- Email: {recipient_email}
+- Name: {recipient_name or 'Unknown'}
+- Company: {company}
+
+GREETING TO USE (first line, mandatory):
+{greeting}
+
+ADDITIONAL CONTEXT FROM USER:
+{global_context or 'None provided.'}
+
+SIGN-OFF:
+End with exactly:
+Best,
+{first_name}
+
+Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}"""
+
+    return _call_groq(system_prompt, user_prompt, api_key)
+
+
+def _build_status_instructions(reply_status, reply_content, check_back_date, company):
+    """
+    Returns a detailed, status-specific instruction block for the AI prompt.
+    This is the core logic that makes each follow-up fundamentally different.
+    """
+
+    reply_section = f"\nTHEIR ACTUAL REPLY:\n\"\"\"\n{reply_content}\n\"\"\"\n" if reply_content else ""
+
+    if reply_status == "no_reply":
+        return f"""STATUS: No Reply — the recipient has not responded to the original email.
+
+TONE & INTENT:
+- Brief and non-pushy — 80 to 110 words total
+- Acknowledge they are likely busy
+- Do not repeat the full pitch from the original email
+- A single soft nudge — "wanted to make sure this didn't get buried"
+- End with a low-pressure, open-ended question
+- Do NOT sound desperate or apologetic{reply_section}"""
+
+    elif reply_status == "check_back":
+        date_line = f"- They asked you to follow up around: {check_back_date}" if check_back_date else ""
+        return f"""STATUS: Check Back — the recipient replied and asked you to reach out again later.
+
+TONE & INTENT:
+- Warm and conversational — you already have a micro-relationship since they replied
+- Open by referencing THEIR suggestion to follow up (e.g., "You had mentioned reaching out again — following up as suggested")
+- Do NOT re-introduce yourself fully — they remember you
+- Keep it brief — 90 to 130 words
+- Mention your availability for May to July 2026 in one line
+- End with a soft, specific ask — a quick call, a 15-min chat, etc.
+{date_line}{reply_section}"""
+
+    elif reply_status == "interested":
+        return f"""STATUS: Interested — the recipient replied positively and wants more information or a call.
+
+TONE & INTENT:
+- Warm, confident, and direct — do not undersell yourself
+- Directly address whatever they asked or expressed interest in
+- If they asked for GitHub/portfolio, acknowledge that naturally
+- Propose a concrete next step — suggest a specific timeframe for a call or meeting
+- 100 to 150 words
+- This is NOT a nudge — it is an advancement email. Move the conversation forward.{reply_section}"""
+
+    elif reply_status == "no_openings":
+        return f"""STATUS: No Openings — the recipient explicitly said there are no positions available right now.
+
+TONE & INTENT:
+- Short, gracious, zero pressure — 60 to 90 words
+- Thank them genuinely for taking the time to reply (most people don't)
+- Express that you understand completely
+- Ask warmly if they could keep your profile in mind for future openings
+- OR ask if they know anyone else in their network who might be looking for interns
+- Leave a strongly positive final impression — these people move companies and open roles later
+- Do NOT sound disappointed or pushy{reply_section}"""
+
+    else:
+        # Fallback for any unexpected status
+        return f"""STATUS: General follow-up.
+TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 
 def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama/llama-4-scout-17b-16e-instruct"):

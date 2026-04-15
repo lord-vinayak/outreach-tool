@@ -15,6 +15,24 @@ def get_db():
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
+def migrate_reply_status_columns(conn):
+    cursor = conn.cursor()
+    existing = [row[1] for row in cursor.execute("PRAGMA table_info(recipients)").fetchall()]
+
+    new_columns = [
+        ("reply_status",    "TEXT DEFAULT 'no_reply'"),
+        ("reply_content",   "TEXT"),
+        ("check_back_date", "TEXT"),
+        ("exclude_followup","INTEGER DEFAULT 0"),
+        ("status_updated_at", "TEXT"),
+    ]
+
+    for col_name, col_def in new_columns:
+        if col_name not in existing:
+            cursor.execute(f"ALTER TABLE recipients ADD COLUMN {col_name} {col_def}")
+
+    conn.commit()
+
 
 def init_db():
     """Create tables if they don't exist."""
@@ -54,8 +72,8 @@ def init_db():
             error_message TEXT
         );
     """)
-
     conn.commit()
+    migrate_reply_status_columns(conn)
     conn.close()
 
 

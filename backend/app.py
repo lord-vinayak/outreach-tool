@@ -15,7 +15,7 @@ from config import load_config, save_config, is_profile_complete, is_settings_co
 from db import init_db, get_db, query_db, execute_db
 from utils import parse_email_list
 from email_sender import send_email
-from ai_generator import generate_email, generate_followup
+from ai_generator import generate_email, generate_followup, generate_contextual_followup
 from resume_parser import parse_resume
 
 app = Flask(__name__)
@@ -358,6 +358,57 @@ def update_recipient(campaign_id, recipient_id):
     return jsonify({"message": "Recipient updated"})
 
 
+@app.route("/api/recipient/<int:recipient_id>/status", methods=["PATCH"])
+def update_recipient_status(recipient_id):
+    data = request.json or {}
+    reply_status = data.get("reply_status", "no_reply")
+    reply_content = data.get("reply_content")
+    check_back_date = data.get("check_back_date")
+    exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection"] else data.get("exclude_followup", 0)
+    
+    conn = get_db()
+    conn.execute(
+        "UPDATE recipients SET reply_status = ?, reply_content = ?, check_back_date = ?, exclude_followup = ?, status_updated_at = ? WHERE id = ?",
+        (reply_status, reply_content, check_back_date, int(exclude_followup), datetime.utcnow().isoformat(), recipient_id)
+    )
+    conn.commit()
+    conn.close()
+    
+    recipient = query_db("SELECT * FROM recipients WHERE id = ?", (recipient_id,), one=True)
+    return jsonify({"message": "Status updated successfully", "recipient": recipient})
+
+@app.route("/api/campaign/<int:campaign_id>/recipients/status", methods=["PATCH"])
+def bulk_update_recipient_statuses(campaign_id):
+    data = request.json or {}
+    updates = data.get("updates", [])
+    conn = get_db()
+    for update in updates:
+        recipient_id = update["recipient_id"]
+        reply_status = update["reply_status"]
+        reply_content = update.get("reply_content")
+        check_back_date = update.get("check_back_date")
+        exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection"] else update.get("exclude_followup", 0)
+        
+        conn.execute(
+            "UPDATE recipients SET reply_status = ?, reply_content = ?, check_back_date = ?, exclude_followup = ?, status_updated_at = ? WHERE id = ? AND campaign_id = ?",
+            (reply_status, reply_content, check_back_date, int(exclude_followup), datetime.utcnow().isoformat(), recipient_id, campaign_id)
+        )
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Statuses updated successfully"})
+
+@app.route("/api/campaign/<int:campaign_id>/followup-eligible", methods=["GET"])
+def get_followup_eligible(campaign_id):
+    recipients = query_db("""
+        SELECT * FROM recipients 
+        WHERE campaign_id = ? 
+        AND status = 'sent' 
+        AND follow_up_sent = 0 
+        AND exclude_followup = 0 
+        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection')
+    """, (campaign_id,))
+    return jsonify(recipients)
+
 @app.route("/api/campaign/<int:campaign_id>/recipient/<int:recipient_id>/regenerate", methods=["POST"])
 def regenerate_recipient_email(campaign_id, recipient_id):
     """Regenerate AI email for a single recipient."""
@@ -522,21 +573,26 @@ def delete_campaign(campaign_id):
 # ─── Follow-up Routes ─────────────────────────────────────────────────────────
 
 
-@app.route("/api/campaign/<int:campaign_id>/followup/generate", methods=["POST"])
+@app.route("/api/campaign/<int:campaign_id>/generate-followups", methods=["POST"])
 def generate_followups(campaign_id):
-    """Generate follow-up emails for sent recipients who haven't been followed up."""
     config = load_config()
     if not config.get("groq_api_key"):
         return jsonify({"error": "Groq API key not configured"}), 400
 
     data = request.json or {}
-    followup_context = data.get("context", "")
+    global_context = data.get("global_context", "")
+    recipient_ids = data.get("recipient_ids")
 
-    # Get recipients who were sent but not followed up
-    recipients = query_db("""
+    base_query = """
         SELECT * FROM recipients 
         WHERE campaign_id = ? AND status = 'sent' AND follow_up_sent = 0
-    """, (campaign_id,))
+        AND exclude_followup = 0 
+        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection')
+    """
+    
+    recipients = query_db(base_query, (campaign_id,))
+    if recipient_ids:
+        recipients = [r for r in recipients if r["id"] in recipient_ids]
 
     if not recipients:
         return jsonify({"error": "No recipients eligible for follow-up"}), 400
@@ -549,11 +605,16 @@ def generate_followups(campaign_id):
     conn = get_db()
     for r in recipients:
         try:
-            result = generate_followup(
+            result = generate_contextual_followup(
                 profile=profile,
                 original_subject=r["subject"],
                 original_body=r["email_body"],
-                followup_context=followup_context,
+                recipient_email=r["email"],
+                recipient_name=r["name"],
+                reply_status=r["reply_status"] or "no_reply",
+                reply_content=r["reply_content"],
+                check_back_date=r["check_back_date"],
+                global_context=global_context,
                 api_key=api_key,
                 resume_parsed=resume_parsed
             )
@@ -570,10 +631,19 @@ def generate_followups(campaign_id):
 
     conn.close()
 
+    generated = query_db("""
+        SELECT f.*, r.email as recipient_email, r.name as recipient_name, r.message_id as original_message_id, r.reply_status
+        FROM followups f
+        JOIN recipients r ON r.id = f.recipient_id
+        WHERE r.campaign_id = ? AND f.status = 'draft'
+        ORDER BY f.id DESC
+    """, (campaign_id,))
+
     return jsonify({
         "message": f"Generated follow-ups for {len(recipients) - len(errors)} recipients",
         "errors": errors,
         "campaign_id": campaign_id,
+        "followups": generated
     })
 
 
@@ -581,7 +651,7 @@ def generate_followups(campaign_id):
 def preview_followups(campaign_id):
     """Get follow-up drafts for preview."""
     followups = query_db("""
-        SELECT f.*, r.email as recipient_email, r.name as recipient_name, r.message_id as original_message_id
+        SELECT f.*, r.email as recipient_email, r.name as recipient_name, r.message_id as original_message_id, r.reply_status
         FROM followups f
         JOIN recipients r ON r.id = f.recipient_id
         WHERE r.campaign_id = ? AND f.status = 'draft'
@@ -721,6 +791,29 @@ def get_followup_progress(campaign_id):
 
 # ─── Dashboard Route ──────────────────────────────────────────────────────────
 
+
+@app.route("/api/dashboard/reply-stats", methods=["GET"])
+def reply_stats():
+    res = query_db("""
+        SELECT reply_status, COUNT(*) as count 
+        FROM recipients 
+        WHERE status = 'sent' 
+        GROUP BY reply_status
+    """)
+    
+    stats_dict = {
+        "interested": 0,
+        "check_back": 0,
+        "no_reply": 0,
+        "invalid_email": 0
+    }
+    
+    for row in res:
+        key = row["reply_status"] or "no_reply"
+        if key in stats_dict:
+            stats_dict[key] += row["count"]
+            
+    return jsonify(stats_dict)
 
 @app.route("/api/dashboard", methods=["GET"])
 def dashboard():
