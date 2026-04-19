@@ -158,15 +158,15 @@ export default function Settings() {
             id="send-delay"
             type="range"
             name="send_delay_seconds"
-            min="45"
-            max="90"
+            min="20"
+            max="60"
             value={form.send_delay_seconds}
             onChange={handleChange}
             className="w-full accent-indigo-600"
           />
           <div className="flex justify-between text-xs text-gray-400">
-            <span>45s</span>
-            <span>90s</span>
+            <span>20s</span>
+            <span>60s</span>
           </div>
         </div>
 
