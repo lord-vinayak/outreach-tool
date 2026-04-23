@@ -7,20 +7,36 @@ export default function Dashboard() {
   const [replyStats, setReplyStats] = useState(null)
   const [recent, setRecent] = useState([])
   const [loading, setLoading] = useState(true)
+  const [checking, setChecking] = useState(false)
+  const [monitorResult, setMonitorResult] = useState(null)
 
   useEffect(() => {
     Promise.all([
       api.get('/dashboard'),
-      api.get('/dashboard/reply-stats')
+      api.get('/dashboard/reply-stats'),
+      api.get('/inbox/status')
     ])
-      .then(([dashRes, replyRes]) => {
+      .then(([dashRes, replyRes, inboxRes]) => {
         setStats(dashRes.data.stats)
         setRecent(dashRes.data.recent_campaigns)
         setReplyStats(replyRes.data)
+        setMonitorResult(inboxRes.data)
       })
       .catch(console.error)
       .finally(() => setLoading(false))
   }, [])
+
+  const handleCheckNow = async () => {
+    setChecking(true);
+    try {
+      const res = await api.post('/inbox/check', {}, { timeout: 120000 });
+      setMonitorResult(res.data);
+    } catch (err) {
+      setMonitorResult({ error: "Check failed. See console for details." });
+    } finally {
+      setChecking(false);
+    }
+  };
 
   if (loading) {
     return <div className="text-center py-12 text-gray-500">Loading dashboard...</div>
@@ -67,6 +83,50 @@ export default function Dashboard() {
         >
           + New Campaign
         </Link>
+      </div>
+
+      {/* Inbox Monitor */}
+      <div className="mb-8 p-4 bg-white border border-gray-200 rounded-lg shadow-sm">
+        <div className="flex justify-between items-start">
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900 mb-1">📬 Inbox Monitor</h2>
+            <p className="text-sm text-gray-500">
+              {monitorResult?.last_run 
+                ? `Last checked: ${Math.max(0, Math.floor((new Date() - new Date(monitorResult.last_run + "Z")) / 60000))} minutes ago`
+                : "Monitor has not run yet. Click Check Now to scan your inbox."}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">● Auto-check every 10 minutes</p>
+            
+            <div className="mt-4 text-sm text-gray-700 border-l-2 border-gray-200 pl-3">
+              {monitorResult?.error ? (
+                <p className="text-red-600 font-medium">{monitorResult.error}</p>
+              ) : monitorResult && (monitorResult.bounces_detected > 0 || monitorResult.ooo_detected > 0) ? (
+                <>
+                  <p>Last run results:</p>
+                  <ul className="mt-2 space-y-1">
+                    {monitorResult.bounces_detected > 0 && <li>🔴  {monitorResult.bounces_detected} hard bounce(s) detected → marked as Invalid Email</li>}
+                    {monitorResult.ooo_detected > 0 && <li>🟡  {monitorResult.ooo_detected} out-of-office replie(s) → set to Check Back</li>}
+                    <li>✓  {monitorResult.updated} recipients updated</li>
+                  </ul>
+                </>
+              ) : monitorResult?.last_run ? (
+                <p className="font-medium text-green-700">✓ No new bounces or OOO replies found.</p>
+              ) : null}
+            </div>
+          </div>
+          <button
+            onClick={handleCheckNow}
+            disabled={checking}
+            className="inline-flex justify-center items-center px-4 py-2 bg-gray-100 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-200 transition-colors disabled:opacity-50 min-w-[120px]"
+          >
+            {checking ? (
+              <span className="flex items-center gap-2">
+                <span className="animate-spin h-4 w-4 border-2 border-gray-500 border-t-transparent rounded-full" />
+                Scanning...
+              </span>
+            ) : "Check Now"}
+          </button>
+        </div>
       </div>
 
       {/* CRM Stats */}

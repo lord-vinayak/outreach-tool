@@ -17,12 +17,14 @@ export default function CampaignDetail() {
   const { campaignId } = useParams()
   const navigate = useNavigate()
   const [campaign, setCampaign] = useState(null)
+  const [bounces, setBounces] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [followupContext, setFollowupContext] = useState('')
   const [generating, setGenerating] = useState(false)
   const [expanded, setExpanded] = useState({})
   const [replyExpanded, setReplyExpanded] = useState({})
+  const [showDeliveryIssues, setShowDeliveryIssues] = useState(false)
 
   // Fetch campaign
   useEffect(() => {
@@ -30,8 +32,14 @@ export default function CampaignDetail() {
   }, [campaignId])
 
   const fetchCampaign = () => {
-    api.get(`/campaign/${campaignId}`)
-      .then((res) => setCampaign(res.data))
+    Promise.all([
+      api.get(`/campaign/${campaignId}`),
+      api.get(`/campaign/${campaignId}/bounces`)
+    ])
+      .then(([campRes, bouncesRes]) => {
+        setCampaign(campRes.data)
+        setBounces(bouncesRes.data)
+      })
       .catch((err) => setError(err.response?.data?.error || 'Failed to load campaign'))
       .finally(() => setLoading(false))
   }
@@ -174,6 +182,49 @@ export default function CampaignDetail() {
           </div>
         )}
       </div>
+
+      {/* Delivery Issues */}
+      {bounces && bounces.length > 0 && (
+        <div className="mb-6 border border-red-200 bg-red-50 rounded-lg p-4">
+          <div className="flex justify-between items-center mb-2">
+            <h3 className="font-semibold text-red-900">
+              ⚠️ Delivery Issues ({bounces.length})
+            </h3>
+            <button
+              onClick={() => setShowDeliveryIssues(!showDeliveryIssues)}
+              className="text-xs text-red-700 hover:text-red-900 font-medium"
+            >
+              {showDeliveryIssues ? '[▲ Hide]' : '[▼ Show]'}
+            </button>
+          </div>
+          {showDeliveryIssues && (
+            <div className="mt-4">
+               <p className="text-sm text-red-800 mb-3">
+                These addresses hard-bounced — emails were not delivered. Valid email addresses do not exist or are unreachable. They have been permanently excluded from future follow-ups.
+               </p>
+               <div className="space-y-2">
+                 {bounces.map(b => (
+                   <div key={b.id} className="flex justify-between items-center bg-white/50 p-2 rounded border border-red-100">
+                     <div className="flex items-center gap-3">
+                       <span className="text-red-500 font-bold">✗</span>
+                       <span className="text-gray-900 font-medium line-through decoration-red-400">{b.email}</span>
+                       {b.resolved_full_name && <span className="text-xs text-gray-500">({b.resolved_full_name})</span>}
+                     </div>
+                     <div className="flex items-center gap-3">
+                       <span className="text-xs text-gray-500">
+                         detected {new Date(b.status_updated_at).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                       </span>
+                       <span className="text-[10px] px-2 py-0.5 rounded-full bg-red-100 text-red-700 font-medium">
+                         {(b.error_message || '').includes('Hard bounce') ? 'Auto-detected' : 'Manual'}
+                       </span>
+                     </div>
+                   </div>
+                 ))}
+               </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Recipients Table */}
       <h2 className="text-lg font-semibold text-gray-900 mb-3">

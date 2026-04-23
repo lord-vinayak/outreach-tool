@@ -27,6 +27,42 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # In-memory progress tracking for send jobs
 send_progress = {}
 
+from apscheduler.schedulers.background import BackgroundScheduler
+from inbox_monitor import run_inbox_monitor
+import threading
+
+# Global variable to store last monitor run result
+_last_monitor_result = {}
+_monitor_lock = threading.Lock()
+
+def scheduled_inbox_check():
+    """Runs every 10 minutes in background."""
+    from config import load_config
+    from db import get_db
+    config = load_config()
+    conn = get_db()
+    try:
+        with _monitor_lock:
+            global _last_monitor_result
+            result = run_inbox_monitor(config, conn)
+            result["triggered_by"] = "scheduler"
+            _last_monitor_result = result
+            print(f"[Inbox Monitor] Bounces: {result.get('bounces_detected', 0)}, "
+                  f"OOO: {result.get('ooo_detected', 0)}, "
+                  f"Updated: {result.get('updated', 0)}")
+    except Exception as e:
+        print(f"[Inbox Monitor] Scheduler error: {e}")
+    finally:
+        conn.close()
+
+# Start scheduler when app starts
+scheduler = BackgroundScheduler()
+scheduler.add_job(scheduled_inbox_check, 'interval', minutes=10, id='inbox_monitor')
+scheduler.start()
+
+import atexit
+atexit.register(lambda: scheduler.shutdown(wait=False))
+
 
 # ─── Profile Routes ──────────────────────────────────────────────────────────
 
@@ -1009,6 +1045,60 @@ def reengagement_candidates():
     candidates = query_db(query, params)
     
     return jsonify({"candidates": candidates})
+
+
+# ─── Inbox Monitor Routes ─────────────────────────────────────────────────────
+
+@app.route("/api/inbox/check", methods=["POST"])
+def manual_inbox_check():
+    """Manually trigger inbox monitoring — same as scheduled job."""
+    if _monitor_lock.locked():
+        return jsonify({"error": "Monitor is already running. Please wait."}), 429
+
+    from config import load_config
+    from db import get_db
+    config = load_config()
+    conn = get_db()
+
+    try:
+        with _monitor_lock:
+            result = run_inbox_monitor(config, conn)
+            result["triggered_by"] = "manual"
+            global _last_monitor_result
+            _last_monitor_result = result
+            return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    finally:
+        conn.close()
+
+@app.route("/api/inbox/status", methods=["GET"])
+def inbox_status():
+    return jsonify(_last_monitor_result if _last_monitor_result else {
+        "last_run": None,
+        "bounces_detected": 0,
+        "ooo_detected": 0,
+        "updated": 0,
+        "message": "Monitor has not run yet since app start."
+    })
+
+@app.route("/api/campaign/<int:campaign_id>/bounces", methods=["GET"])
+def campaign_bounces(campaign_id):
+    from db import get_db
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, email, name, resolved_full_name, reply_status,
+               error_message, status_updated_at
+        FROM recipients
+        WHERE campaign_id = ?
+        AND reply_status = 'invalid_email'
+        AND (error_message LIKE '%bounce%' OR error_message LIKE '%does not exist%')
+    """, (campaign_id,))
+    rows = cursor.fetchall()
+    columns = [d[0] for d in cursor.description]
+    conn.close()
+    return jsonify([dict(zip(columns, row)) for row in rows])
 
 
 # ─── App Startup ──────────────────────────────────────────────────────────────
