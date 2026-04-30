@@ -31,6 +31,12 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from inbox_monitor import run_inbox_monitor
 import threading
 
+
+def extract_domain(email):
+    """Extract the domain part from an email address."""
+    return email.split("@")[-1].strip().lower() if "@" in email else ""
+
+
 # Global variable to store last monitor run result
 _last_monitor_result = {}
 _monitor_lock = threading.Lock()
@@ -400,7 +406,7 @@ def update_recipient_status(recipient_id):
     reply_status = data.get("reply_status", "no_reply")
     reply_content = data.get("reply_content")
     check_back_date = data.get("check_back_date")
-    exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection"] else data.get("exclude_followup", 0)
+    exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection" ] else data.get("exclude_followup", 0)
     
     conn = get_db()
     conn.execute(
@@ -412,6 +418,16 @@ def update_recipient_status(recipient_id):
     
     recipient = query_db("SELECT * FROM recipients WHERE id = ?", (recipient_id,), one=True)
     return jsonify({"message": "Status updated successfully", "recipient": recipient})
+
+@app.route("/api/recipient/<int:recipient_id>", methods=["DELETE"])
+def delete_recipient(recipient_id):
+    conn = get_db()
+    # Delete any follow-ups for this recipient first (FK safety)
+    conn.execute("DELETE FROM followups WHERE recipient_id = ?", (recipient_id,))
+    conn.execute("DELETE FROM recipients WHERE id = ?", (recipient_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Recipient deleted"})
 
 @app.route("/api/campaign/<int:campaign_id>/recipients/status", methods=["PATCH"])
 def bulk_update_recipient_statuses(campaign_id):
@@ -441,7 +457,7 @@ def get_followup_eligible(campaign_id):
         AND status = 'sent' 
         AND follow_up_sent = 0 
         AND exclude_followup = 0 
-        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection')
+        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
     """, (campaign_id,))
     return jsonify(recipients)
 
@@ -502,10 +518,15 @@ def send_campaign(campaign_id):
     if not os.path.exists(resume_path):
         return jsonify({"error": "Resume PDF not found. Upload it in Profile."}), 400
 
-    recipients = query_db(
-        "SELECT * FROM recipients WHERE campaign_id = ? AND status = 'draft' AND subject IS NOT NULL",
-        (campaign_id,),
-    )
+    recipients = query_db("""
+        SELECT * FROM recipients
+        WHERE campaign_id = ?
+          AND status = 'draft'
+          AND subject IS NOT NULL
+          AND LOWER(SUBSTR(email, INSTR(email, '@') + 1)) NOT IN (
+              SELECT domain FROM blocked_domains
+          )
+    """, (campaign_id,))
     if not recipients:
         return jsonify({"error": "No emails ready to send"}), 400
 
@@ -623,7 +644,7 @@ def generate_followups(campaign_id):
         SELECT * FROM recipients 
         WHERE campaign_id = ? AND status = 'sent' AND follow_up_sent = 0
         AND exclude_followup = 0 
-        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection')
+        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
     """
     
     recipients = query_db(base_query, (campaign_id,))
@@ -714,6 +735,53 @@ def update_followup(followup_id):
 
     return jsonify({"message": "Follow-up updated"})
 
+@app.route("/api/followup/<int:followup_id>", methods=["DELETE"])
+def delete_followup(followup_id):
+    conn = get_db()
+    conn.execute("DELETE FROM followups WHERE id = ?", (followup_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": "Follow-up deleted"})
+
+
+# ─── Blocked Domains Routes ───────────────────────────────────────────────────
+
+
+@app.route("/api/blocked-domains", methods=["GET"])
+def get_blocked_domains():
+    domains = query_db("SELECT * FROM blocked_domains ORDER BY blocked_at DESC")
+    return jsonify(domains)
+
+
+@app.route("/api/blocked-domains", methods=["POST"])
+def block_domain():
+    data = request.json or {}
+    domain = data.get("domain", "").strip().lower()
+    reason = data.get("reason", "")
+    if not domain:
+        return jsonify({"error": "Domain required"}), 400
+    try:
+        conn = get_db()
+        conn.execute(
+            "INSERT INTO blocked_domains (domain, reason, blocked_at) VALUES (?, ?, ?)",
+            (domain, reason, datetime.utcnow().isoformat())
+        )
+        conn.commit()
+        conn.close()
+        return jsonify({"message": f"{domain} blocked"})
+    except Exception:
+        return jsonify({"error": "Domain already blocked"}), 409
+
+
+@app.route("/api/blocked-domains/<string:domain>", methods=["DELETE"])
+def unblock_domain(domain):
+    conn = get_db()
+    conn.execute("DELETE FROM blocked_domains WHERE domain = ?", (domain.lower(),))
+    conn.commit()
+    conn.close()
+    return jsonify({"message": f"{domain} unblocked"})
+
+
 
 @app.route("/api/campaign/<int:campaign_id>/followup/send", methods=["POST"])
 def send_followups(campaign_id):
@@ -728,11 +796,14 @@ def send_followups(campaign_id):
         return jsonify({"error": "Resume PDF not found"}), 400
 
     followups = query_db("""
-        SELECT f.*, r.email as recipient_email, r.name as recipient_name, 
+        SELECT f.*, r.email as recipient_email, r.name as recipient_name,
                r.message_id as original_message_id, r.id as rid
         FROM followups f
         JOIN recipients r ON r.id = f.recipient_id
         WHERE r.campaign_id = ? AND f.status = 'draft'
+          AND LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1)) NOT IN (
+              SELECT domain FROM blocked_domains
+          )
         ORDER BY f.id
     """, (campaign_id,))
 

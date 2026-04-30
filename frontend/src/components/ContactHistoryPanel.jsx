@@ -138,25 +138,54 @@ function InlineStatusEditor({ record, onSaveSuccess }) {
   )
 }
 
-export default function ContactHistoryPanel({ email, isOpen, onClose, onStatusUpdated }) {
+export default function ContactHistoryPanel({ email, isOpen, onClose, onStatusUpdated, onBlockUpdated }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(false)
+  const [blockedDomains, setBlockedDomains] = useState([])
   const panelRef = useRef(null)
 
   useEffect(() => {
     if (!isOpen || !email) return
     let active = true
     setLoading(true)
-    api.get(`/contact/${encodeURIComponent(email)}`)
-      .then(res => {
+    
+    Promise.all([
+      api.get(`/contact/${encodeURIComponent(email)}`),
+      api.get('/blocked-domains')
+    ])
+      .then(([contactRes, blockedRes]) => {
         if (active) {
-          setData(res.data)
+          setData(contactRes.data)
+          setBlockedDomains(blockedRes.data.map(d => d.domain))
           setLoading(false)
         }
       })
       .catch(console.error)
+      
     return () => { active = false }
   }, [isOpen, email])
+
+  const toggleDomainBlock = async (domain) => {
+    if (!domain) return
+    if (blockedDomains.includes(domain)) {
+      try {
+        await api.delete(`/blocked-domains/${domain}`)
+        setBlockedDomains(prev => prev.filter(d => d !== domain))
+        if (onBlockUpdated) onBlockUpdated(domain, false)
+      } catch (err) {
+        console.error('Failed to unblock domain:', err)
+      }
+    } else {
+      const reason = window.prompt(`Reason for blocking ${domain}? (optional)`) ?? ''
+      try {
+        await api.post('/blocked-domains', { domain, reason })
+        setBlockedDomains(prev => [...prev, domain])
+        if (onBlockUpdated) onBlockUpdated(domain, true)
+      } catch (err) {
+        console.error('Failed to block domain:', err)
+      }
+    }
+  }
 
   useEffect(() => {
     const handleEsc = (e) => {
@@ -203,25 +232,43 @@ export default function ContactHistoryPanel({ email, isOpen, onClose, onStatusUp
           <div className="p-6 space-y-6">
             {/* Header */}
             <div>
-              <div className="flex items-center gap-2 mb-1">
-                <span className="text-xl">📧</span>
-                <span className="font-semibold text-gray-900 text-lg">{data.email}</span>
-              </div>
-              {data.resolved_name ? (
-                <div className="flex items-center gap-2 text-sm text-gray-600 ml-1">
-                  <span>👤</span>
-                  <span>{data.resolved_name}</span>
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="text-xl">📧</span>
+                    <span className="font-semibold text-gray-900 text-lg">{data.email}</span>
+                  </div>
+                  {data.resolved_name ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 ml-1">
+                      <span>👤</span>
+                      <span>{data.resolved_name}</span>
+                    </div>
+                  ) : null}
+                  {data.company ? (
+                    <div className="flex items-center gap-2 text-sm text-gray-600 ml-1 mt-1">
+                      <span>🏢</span>
+                      <span>{data.company}</span>
+                    </div>
+                  ) : null}
+                  
+                  <div className="mt-4 text-sm text-gray-500 bg-gray-50 p-2 rounded-md border border-gray-100">
+                    Contacted <span className="font-semibold">{data.total_contacts}</span> time{data.total_contacts !== 1 ? 's' : ''} across campaigns
+                  </div>
                 </div>
-              ) : null}
-              {data.company ? (
-                <div className="flex items-center gap-2 text-sm text-gray-600 ml-1 mt-1">
-                  <span>🏢</span>
-                  <span>{data.company}</span>
-                </div>
-              ) : null}
-              
-              <div className="mt-4 text-sm text-gray-500 bg-gray-50 p-2 rounded-md border border-gray-100">
-                Contacted <span className="font-semibold">{data.total_contacts}</span> time{data.total_contacts !== 1 ? 's' : ''} across campaigns
+                
+                {data.email && (
+                  <button
+                    onClick={() => toggleDomainBlock(data.email.split('@')[1]?.toLowerCase())}
+                    className={`text-xs px-2 py-1 mt-1 rounded border transition-all ${
+                      blockedDomains.includes(data.email.split('@')[1]?.toLowerCase())
+                        ? 'bg-red-100 text-red-600 border-red-300 hover:bg-red-200'
+                        : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-red-50 hover:text-red-400'
+                    }`}
+                    title={blockedDomains.includes(data.email.split('@')[1]?.toLowerCase()) ? 'Click to unblock this domain' : 'Block this company\'s domain'}
+                  >
+                    {blockedDomains.includes(data.email.split('@')[1]?.toLowerCase()) ? '🚫 Blocked' : 'Block Domain'}
+                  </button>
+                )}
               </div>
             </div>
 

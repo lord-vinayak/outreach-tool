@@ -23,6 +23,7 @@ export default function Search() {
   const [showReengagement, setShowReengagement] = useState(false)
   
   const [selectedEmail, setSelectedEmail] = useState(null)
+  const [blockedDomains, setBlockedDomains] = useState([])
   
   useEffect(() => {
     let active = true;
@@ -35,6 +36,13 @@ export default function Search() {
         if(active) setReengagementData(res.data.candidates)
       })
       .catch(console.error)
+
+    api.get('/blocked-domains')
+      .then(res => {
+        if(active) setBlockedDomains(res.data.map(d => d.domain))
+      })
+      .catch(console.error)
+
     return () => { active = false };
   }, [])
   
@@ -73,6 +81,26 @@ export default function Search() {
     if (query.length >= 2) {
       setPage(1)
       setSearchParams({ q: query })
+    }
+  }
+
+  const toggleDomainBlock = async (domain) => {
+    if (!domain) return
+    if (blockedDomains.includes(domain)) {
+      try {
+        await api.delete(`/blocked-domains/${domain}`)
+        setBlockedDomains(prev => prev.filter(d => d !== domain))
+      } catch (err) {
+        console.error('Failed to unblock domain:', err)
+      }
+    } else {
+      const reason = window.prompt(`Reason for blocking ${domain}? (optional)`) ?? ''
+      try {
+        await api.post('/blocked-domains', { domain, reason })
+        setBlockedDomains(prev => [...prev, domain])
+      } catch (err) {
+        console.error('Failed to block domain:', err)
+      }
     }
   }
 
@@ -161,34 +189,56 @@ export default function Search() {
           </div>
           
           <div className="space-y-3 mb-6">
-            {results.map(r => (
-              <div 
-                key={r.id} 
-                onClick={() => setSelectedEmail(r.email)}
-                className="border border-gray-200 bg-white rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition-colors shadow-sm"
-              >
-                <div className="flex items-start justify-between">
-                  <div>
-                    <span className="font-medium text-gray-900">{r.email}</span>
-                    {r.name && (
-                      <span className="text-gray-500 text-sm ml-2">({r.name})</span>
-                    )}
+            {results.map(r => {
+              const domain = r.email?.split('@')[1]?.toLowerCase()
+              const blocked = domain && blockedDomains.includes(domain)
+              return (
+                <div 
+                  key={r.id} 
+                  onClick={() => setSelectedEmail(r.email)}
+                  className={`border bg-white rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition-colors shadow-sm ${
+                    blocked ? 'border-red-200 bg-red-50' : 'border-gray-200'
+                  }`}
+                >
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <span className="font-medium text-gray-900">{r.email}</span>
+                      {r.name && (
+                        <span className="text-gray-500 text-sm ml-2">({r.name})</span>
+                      )}
+                      {blocked && (
+                        <span className="ml-2 text-xs bg-red-100 text-red-500 px-1.5 py-0.5 rounded">blocked</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                      <button
+                        onClick={() => toggleDomainBlock(domain)}
+                        className={`text-xs px-2 py-1 rounded border transition-all ${
+                          blocked
+                            ? 'bg-red-100 text-red-600 border-red-300 hover:bg-red-200'
+                            : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-red-50 hover:text-red-400'
+                        }`}
+                        title={blocked ? 'Click to unblock this domain' : 'Block this company\'s domain'}
+                      >
+                        {blocked ? '🚫 Blocked' : 'Block Domain'}
+                      </button>
+                      <StatusBadge status={r.reply_status || r.send_status} />
+                    </div>
                   </div>
-                  <StatusBadge status={r.reply_status || r.send_status} />
-                </div>
-                <div className="text-sm text-gray-500 mt-1">
-                  {r.campaign_name} · Sent {new Date(r.sent_at).toLocaleDateString()}
-                </div>
-                <div className="text-sm text-gray-400 mt-1 truncate">
-                  {r.subject}
-                </div>
-                {r.reply_content ? (
-                  <div className="text-xs text-green-600 font-medium mt-2 flex items-center gap-1">
-                    <span>💬</span> Has reply
+                  <div className="text-sm text-gray-500 mt-1">
+                    {r.campaign_name} · Sent {new Date(r.sent_at).toLocaleDateString()}
                   </div>
-                ) : null}
-              </div>
-            ))}
+                  <div className="text-sm text-gray-400 mt-1 truncate">
+                    {r.subject}
+                  </div>
+                  {r.reply_content ? (
+                    <div className="text-xs text-green-600 font-medium mt-2 flex items-center gap-1">
+                      <span>💬</span> Has reply
+                    </div>
+                  ) : null}
+                </div>
+              )
+            })}
           </div>
           
           {totalPages > 1 && (
@@ -265,6 +315,13 @@ export default function Search() {
         email={selectedEmail} 
         isOpen={!!selectedEmail} 
         onClose={() => setSelectedEmail(null)} 
+        onBlockUpdated={(domain, isBlocked) => {
+          if (isBlocked) {
+            setBlockedDomains(prev => [...prev, domain])
+          } else {
+            setBlockedDomains(prev => prev.filter(d => d !== domain))
+          }
+        }}
       />
     </div>
   )

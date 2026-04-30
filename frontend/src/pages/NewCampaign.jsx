@@ -1,4 +1,4 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api'
 import DuplicateWarning from '../components/DuplicateWarning'
@@ -21,6 +21,14 @@ export default function NewCampaign() {
   const [skippedEmails, setSkippedEmails] = useState(new Set())
   const [showWarning, setShowWarning] = useState(false)
   const [parseSummary, setParseSummary] = useState('')
+  const [blockedDomains, setBlockedDomains] = useState([])
+  const [blockedInPaste, setBlockedInPaste] = useState([])
+
+  useEffect(() => {
+    api.get('/blocked-domains')
+      .then(res => setBlockedDomains(res.data.map(d => d.domain)))
+      .catch(() => {})
+  }, [])
 
   const handleChange = (e) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
@@ -46,9 +54,17 @@ export default function NewCampaign() {
     if (emails.length === 0) {
        setParseSummary('')
        setShowWarning(false)
+       setBlockedInPaste([])
        return
     }
-    
+
+    // Check for blocked domains
+    const blocked = emails.filter(e => {
+      const domain = e.email.split('@')[1]?.toLowerCase()
+      return domain && blockedDomains.includes(domain)
+    })
+    setBlockedInPaste(blocked)
+
     try {
       const res = await api.post('/campaign/check-duplicates', {
         emails: emails.map(e => e.email)
@@ -218,6 +234,17 @@ export default function NewCampaign() {
                {parseSummary}
             </div>
           ) : null}
+
+          {blockedInPaste.length > 0 && (
+            <div className="text-sm text-red-600 bg-red-50 border border-red-300 rounded p-3 mt-2">
+              ⚠️ The following emails are from blocked domains and will be added but skipped during send:
+              <ul className="mt-1 list-disc list-inside">
+                {blockedInPaste.map(e => (
+                  <li key={e.email}>{e.email}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {showWarning && duplicates.length > 0 && (
             <DuplicateWarning 

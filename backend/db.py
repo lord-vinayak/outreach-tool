@@ -34,6 +34,19 @@ def migrate_reply_status_columns(conn):
     conn.commit()
 
 
+def migrate_blocked_domains_table(conn):
+    """Safe migration: create blocked_domains table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS blocked_domains (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            domain TEXT UNIQUE NOT NULL,
+            reason TEXT,
+            blocked_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
 def init_db():
     """Create tables if they don't exist."""
     conn = get_db()
@@ -80,6 +93,7 @@ def init_db():
     """)
     conn.commit()
     migrate_reply_status_columns(conn)
+    migrate_blocked_domains_table(conn)
     conn.close()
 
 
