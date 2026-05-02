@@ -215,7 +215,12 @@ def list_campaigns():
         SELECT c.*, 
                COUNT(r.id) as total_recipients,
                SUM(CASE WHEN r.status = 'sent' THEN 1 ELSE 0 END) as sent_count,
-               SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as failed_count
+               SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+               (
+                   SELECT COUNT(*) FROM followups f
+                   JOIN recipients r2 ON f.recipient_id = r2.id
+                   WHERE r2.campaign_id = c.id AND f.status = 'sent'
+               ) as followups_sent_count
         FROM campaigns c
         LEFT JOIN recipients r ON r.campaign_id = c.id
         GROUP BY c.id

@@ -62,8 +62,15 @@ export default function Campaigns() {
                   <td className="px-4 py-3 text-center text-gray-700">
                     {c.total_recipients}
                   </td>
-                  <td className="px-4 py-3 text-center">
-                    <span className="text-green-600 font-medium">{c.sent_count}</span>
+                  <td className="px-4 py-3">
+                    <div className="flex flex-col items-center">
+                      <span className="text-sm text-gray-500">
+                        📧 <span className="text-green-600 font-medium">{c.sent_count ?? 0}</span> sent
+                      </span>
+                      <span className={`text-xs mt-1 ${c.followups_sent_count > 0 ? 'text-blue-500' : 'text-gray-400'}`}>
+                        🔁 {c.followups_sent_count ?? 0} follow-up{c.followups_sent_count !== 1 ? 's' : ''} sent
+                      </span>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-center">
                     {c.failed_count > 0 ? (
