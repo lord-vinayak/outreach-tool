@@ -1,6 +1,6 @@
 # Outreach Tool
 
-A personal email outreach tool that generates unique, human-sounding personalized emails using the Gemini API and sends them via Gmail SMTP with resume attachment.
+A personal email outreach tool that generates unique, human-sounding personalized emails using the Groq API and sends them via Gmail SMTP with resume attachment.
 
 **Single-user, no-login, localhost-only.**
 
@@ -51,10 +51,10 @@ Then open **http://localhost:5173** in your browser.
 ## Usage
 
 1. **First launch:** Fill in your Profile (name, college, skills, bio, resume PDF)
-2. **Settings:** Add your Gmail address, App Password, and Gemini API key
+2. **Settings:** Add your Gmail address, App Password, and Groq API key
 3. **New Campaign:** Paste emails, describe your goal, and generate personalized emails
 4. **Preview:** Review, edit, or regenerate individual emails
-5. **Send:** Emails are sent one by one with a configurable delay (default 60s)
+5. **Send:** Emails are sent one by one with a configurable delay (default 25s)
 6. **Follow-up:** Send threaded follow-up emails from Campaign Detail page
 
 ## Tech Stack
