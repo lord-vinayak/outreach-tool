@@ -88,11 +88,16 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_recipients_email ON recipients(email);
         CREATE INDEX IF NOT EXISTS idx_recipients_domain ON recipients(email);
         CREATE INDEX IF NOT EXISTS idx_recipients_sent_at ON recipients(sent_at);
-        CREATE INDEX IF NOT EXISTS idx_recipients_reply_status ON recipients(reply_status);
         CREATE INDEX IF NOT EXISTS idx_recipients_campaign_id ON recipients(campaign_id);
     """)
     conn.commit()
+    
     migrate_reply_status_columns(conn)
+    
+    # Create index for reply_status after ensuring the column exists
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_recipients_reply_status ON recipients(reply_status);")
+    conn.commit()
+    
     migrate_blocked_domains_table(conn)
     conn.close()
 
