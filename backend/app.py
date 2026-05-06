@@ -1164,7 +1164,7 @@ def campaign_bounces(campaign_id):
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, email, name, resolved_full_name, reply_status,
+        SELECT id, email, name, reply_status,
                error_message, status_updated_at
         FROM recipients
         WHERE campaign_id = ?
