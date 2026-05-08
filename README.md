@@ -75,7 +75,7 @@ No manual file editing is required. All configuration is handled through the app
 1.  **Profile Page**: Fill in your personal details (Name, College, Skills, Bio) and upload your Resume (PDF). Don't forget to parse your resume. This data is used by the AI to personalize your outreach mails.
 2.  **Settings Page**:
     - **Gmail**: Enter your Gmail address and **App Password** (see below).
-    - **API Keys**: Add up to 3 Groq API keys to enable parallel generation and rate-limit scaling.
+    - **API Keys**: Add up to 3 Groq API keys to enable parallel generation and rate-limit scaling. Use temporary mail services like [SmailPro](https://smailpro.com/temporary-email) to generate fake emails and register them on Groq to get API keys. Try using VPN if your IP gets banned by Groq.
     - **Delay**: Configure the send delay (default 60s) to comply with Gmail's sending limits.
 
 ### 🔑 Getting a Gmail App Password
