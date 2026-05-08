@@ -2,18 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
-body {
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  background-color: #f9fafb;
-  color: #111827;
+@layer base {
+  body {
+    @apply font-sans bg-zinc-50 text-zinc-950 antialiased selection:bg-indigo-200 selection:text-indigo-900;
+  }
 }
 
 /* Flash message animation */
 @keyframes fadeIn {
-  from { opacity: 0; transform: translateY(-8px); }
+  from { opacity: 0; transform: translateY(-4px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
 .flash-message {
-  animation: fadeIn 0.3s ease-out;
+  animation: fadeIn 0.15s ease-out;
+}
+
+/* Custom utilitarian scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-zinc-300;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-zinc-400;
 }

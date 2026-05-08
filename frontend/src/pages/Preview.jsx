@@ -158,17 +158,17 @@ export default function Preview({ isFollowUp = false }) {
   const sendableCount = items.length - blockedItems.length
 
   return (
-    <div id="preview-page" className="max-w-3xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">
+    <div id="preview-page" className="max-w-4xl mx-auto pb-12">
+      <div className="flex items-center justify-between mb-8 pb-4 border-b border-zinc-200">
+        <h1 className="text-3xl font-display font-bold text-zinc-950 tracking-tight">
           {isFollowUp ? 'Follow-up Preview' : 'Email Preview'}
         </h1>
-        <span className="text-sm text-gray-500">
-          {items.length} email{items.length !== 1 ? 's' : ''}
+        <div className="text-xs font-mono bg-zinc-100 border border-zinc-200 px-3 py-1 text-zinc-600">
+          {items.length} EMAIL{items.length !== 1 ? 'S' : ''}
           {blockedItems.length > 0 && (
-            <span className="ml-2 text-red-500">({blockedItems.length} blocked)</span>
+            <span className="ml-2 text-red-600">({blockedItems.length} BLOCKED)</span>
           )}
-        </span>
+        </div>
       </div>
 
       {error ? (
@@ -178,57 +178,57 @@ export default function Preview({ isFollowUp = false }) {
       ) : null}
 
       {blockedItems.length > 0 && (
-        <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2 mb-3">
-          ⚠️ {blockedItems.length} recipient{blockedItems.length !== 1 ? 's' : ''} from blocked domains will be skipped.
+        <div className="text-xs font-mono text-red-800 bg-red-50 border border-red-200 rounded-none px-4 py-3 mb-6">
+          <span className="font-bold">⚠️ BLOCKED DOMAINS:</span> {blockedItems.length} recipient{blockedItems.length !== 1 ? 's' : ''} from blocked domains will be skipped.
           Only <strong>{sendableCount}</strong> email{sendableCount !== 1 ? 's' : ''} will actually be sent.
         </div>
       )}
 
       {/* Top controls */}
-      <div className="flex gap-3 mb-6">
+      <div className="flex gap-4 mb-8">
         <button
           id="send-all-top-btn"
           onClick={handleSendAll}
           disabled={items.length === 0 || sendableCount === 0}
-          className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          className="px-6 py-2.5 bg-indigo-700 text-white font-display font-bold text-xs rounded-none hover:bg-indigo-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors uppercase tracking-widest"
         >
           {sendableCount > 0 ? `Send ${sendableCount} Email${sendableCount !== 1 ? 's' : ''}` : 'No Emails to Send'}
         </button>
         <button
           id="discard-btn"
           onClick={handleDiscard}
-          className="px-5 py-2 bg-white border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+          className="px-6 py-2.5 bg-zinc-50 border border-zinc-300 text-zinc-700 font-display font-bold text-xs rounded-none hover:bg-zinc-100 transition-colors uppercase tracking-widest"
         >
           {isFollowUp ? 'Cancel' : 'Discard Campaign'}
         </button>
       </div>
 
       {/* Email cards */}
-      <div className="space-y-4">
+      <div className="space-y-6">
         {items.map((item, index) => (
           <div
             key={item.id}
-            className={`bg-white border rounded-lg p-4 ${
+            className={`bg-white border rounded-none p-6 ${
               isBlocked(item[emailKey])
-                ? 'border-red-200 bg-red-50'
-                : 'border-gray-200'
+                ? 'border-red-300 bg-red-50/50'
+                : 'border-zinc-300'
             }`}
           >
             {isBlocked(item[emailKey]) && (
-              <div className="text-xs text-red-600 bg-red-100 border border-red-200 rounded px-2 py-1 mb-2 flex items-center gap-1">
-                🚫 <strong>{item[emailKey].split('@')[1]}</strong> is a blocked domain — this email will be skipped during send
+              <div className="text-[10px] font-mono text-red-700 bg-red-100 border border-red-200 rounded-none px-3 py-1.5 mb-4 inline-flex items-center gap-1.5">
+                <span className="font-bold">BLOCKED:</span> {item[emailKey].split('@')[1]}
               </div>
             )}
-            <div className="flex items-center justify-between mb-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-5 pb-3 border-b border-zinc-100 gap-4">
               <div>
-                <span className="text-sm font-medium text-gray-900">
+                <div className="font-display font-bold text-zinc-950 text-lg">
                   {item[nameKey] || 'No name'}
-                </span>
-                <span className="text-sm text-gray-500 ml-2">
+                </div>
+                <div className="text-sm font-mono text-zinc-500 mt-1">
                   {item[emailKey]}
-                </span>
+                </div>
                 {isFollowUp && item.reply_status && (
-                  <span className="ml-3 text-xs px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 capitalize">
+                  <span className="inline-block mt-2 text-[10px] font-mono px-2 py-0.5 border border-amber-200 bg-amber-50 text-amber-800 uppercase tracking-wider">
                     Context: {item.reply_status.replace(/_/g, ' ')}
                   </span>
                 )}
@@ -238,60 +238,60 @@ export default function Preview({ isFollowUp = false }) {
                   <button
                     onClick={() => handleRegenerate(item, index)}
                     disabled={regenerating[item.id]}
-                    className="text-xs px-3 py-1 border border-gray-300 rounded-md text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                    className="text-[11px] font-mono px-3 py-1.5 border border-zinc-300 bg-zinc-50 rounded-none text-zinc-700 hover:bg-zinc-100 disabled:opacity-50 transition-colors uppercase tracking-wider"
                   >
-                    {regenerating[item.id] ? 'Regenerating...' : '↻ Regenerate'}
+                    {regenerating[item.id] ? 'Regenerating...' : 'Regenerate'}
                   </button>
                 )}
                 <button
                   onClick={() => handleDeleteItem(item.id)}
                   title="Remove from campaign"
-                  className="text-xs text-red-400 hover:text-red-600 hover:bg-red-50 px-2 py-1 rounded border border-red-200 transition-all"
+                  className="text-[11px] font-mono px-3 py-1.5 border border-red-200 bg-white rounded-none text-red-600 hover:bg-red-50 transition-all uppercase tracking-wider"
                 >
-                  ✕ Remove
+                  Remove
                 </button>
               </div>
             </div>
 
             {/* Subject */}
-            <div className="mb-2">
-              <label className="text-xs text-gray-500 mb-1 block">Subject</label>
+            <div className="mb-4">
+              <label className="text-[10px] font-display font-bold text-zinc-500 mb-1.5 block uppercase tracking-widest">Subject</label>
               <input
                 type="text"
                 value={item.subject || ''}
                 onChange={(e) => handleEdit(index, 'subject', e.target.value)}
                 onBlur={() => saveEdit(item, index)}
-                className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm focus:ring-1 focus:ring-zinc-900 outline-none font-mono text-zinc-900 bg-zinc-50 focus:bg-white transition-colors"
               />
             </div>
 
             {/* Body */}
             <div>
-              <label className="text-xs text-gray-500 mb-1 block">Body</label>
+              <label className="text-[10px] font-display font-bold text-zinc-500 mb-1.5 block uppercase tracking-widest">Body</label>
               <textarea
                 value={item.email_body || ''}
                 onChange={(e) => handleEdit(index, 'email_body', e.target.value)}
                 onBlur={() => saveEdit(item, index)}
                 rows={8}
-                className="w-full border border-gray-200 rounded px-2 py-1.5 text-sm font-mono leading-relaxed focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-y"
+                className="w-full border border-zinc-300 rounded-none px-3 py-3 text-sm font-mono leading-relaxed focus:ring-1 focus:ring-zinc-900 outline-none resize-y text-zinc-900 bg-zinc-50 focus:bg-white transition-colors"
               />
             </div>
           </div>
         ))}
         {items.length === 0 && (
-          <div className="text-center py-12 bg-white border border-dashed border-gray-300 rounded-lg text-gray-500">
+          <div className="text-center py-16 bg-white border-2 border-dashed border-zinc-200 rounded-none text-zinc-500 font-mono text-sm">
             No emails to send.
           </div>
         )}
       </div>
 
       {/* Bottom controls */}
-      <div className="flex gap-3 mt-6 mb-8">
+      <div className="flex gap-4 mt-8 mb-8 pt-6 border-t border-zinc-200">
         <button
           id="send-all-bottom-btn"
           onClick={handleSendAll}
           disabled={items.length === 0 || sendableCount === 0}
-          className="px-5 py-2 bg-indigo-600 text-white text-sm font-medium rounded-md hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+          className="w-full sm:w-auto px-8 py-3.5 bg-indigo-700 text-white font-display font-bold text-sm rounded-none hover:bg-indigo-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors uppercase tracking-widest"
         >
           {sendableCount > 0 ? `Send ${sendableCount} Email${sendableCount !== 1 ? 's' : ''}` : 'No Emails to Send'}
         </button>

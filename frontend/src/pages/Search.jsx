@@ -106,37 +106,39 @@ export default function Search() {
 
   return (
     <div className="max-w-4xl mx-auto pb-12">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">Search Contacts</h1>
+      <div className="mb-8 pb-4 border-b border-zinc-200">
+        <h1 className="text-3xl font-display font-bold text-zinc-950 tracking-tight">Search Contacts</h1>
+      </div>
       
       {/* Search Bar */}
-      <form onSubmit={handleSearchSubmit} className="mb-6 flex gap-2">
+      <form onSubmit={handleSearchSubmit} className="mb-8 flex gap-3">
         <div className="relative flex-1">
           <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
-            <svg className="h-5 w-5 text-gray-400" viewBox="0 0 20 20" fill="currentColor">
+            <svg className="h-5 w-5 text-zinc-400" viewBox="0 0 20 20" fill="currentColor">
               <path fillRule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clipRule="evenodd" />
             </svg>
           </div>
           <input
             type="text"
-            className="block w-full pl-10 pr-3 py-2 border border-gray-300 rounded-md leading-5 bg-white placeholder-gray-500 focus:outline-none focus:placeholder-gray-400 focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+            className="block w-full pl-10 pr-4 py-3 border border-zinc-300 rounded-none leading-5 bg-zinc-50 placeholder-zinc-400 focus:outline-none focus:bg-white focus:ring-1 focus:ring-zinc-900 font-mono text-sm transition-colors"
             placeholder="Search email, name, or domain..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
           />
         </div>
-        <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700 font-medium">
+        <button type="submit" className="px-8 py-3 bg-indigo-700 text-white rounded-none hover:bg-indigo-800 font-display font-bold uppercase tracking-widest text-xs transition-colors">
           Search
         </button>
       </form>
       
       {/* Filters */}
-      <div className="flex flex-wrap gap-4 mb-6 pt-4 border-t border-gray-200">
-        <label className="flex items-center gap-2 text-sm text-gray-700">
+      <div className="flex flex-wrap gap-5 mb-8 pt-6 border-t border-zinc-200">
+        <label className="flex items-center gap-2 text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest">
           Status:
           <select 
             value={statusFilter} 
             onChange={e => { setStatusFilter(e.target.value); setPage(1); }}
-            className="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm"
+            className="border-zinc-300 rounded-none bg-zinc-50 focus:bg-white focus:ring-1 focus:ring-zinc-900 font-mono text-xs normal-case tracking-normal px-2 py-1 outline-none transition-colors"
           >
             <option value="all">All Statuses</option>
             <option value="no_reply">No Reply</option>
@@ -149,12 +151,12 @@ export default function Search() {
           </select>
         </label>
         
-        <label className="flex items-center gap-2 text-sm text-gray-700">
+        <label className="flex items-center gap-2 text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest">
           Time:
           <select 
             value={daysFilter} 
             onChange={e => { setDaysFilter(e.target.value); setPage(1); }}
-            className="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm"
+            className="border-zinc-300 rounded-none bg-zinc-50 focus:bg-white focus:ring-1 focus:ring-zinc-900 font-mono text-xs normal-case tracking-normal px-2 py-1 outline-none transition-colors"
           >
             <option value="">All time</option>
             <option value="7">Last 7 days</option>
@@ -165,12 +167,12 @@ export default function Search() {
           </select>
         </label>
         
-        <label className="flex items-center gap-2 text-sm text-gray-700">
+        <label className="flex items-center gap-2 text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest">
           Campaign:
           <select 
             value={campaignFilter} 
             onChange={e => { setCampaignFilter(e.target.value); setPage(1); }}
-            className="border-gray-300 rounded-md shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 text-sm max-w-xs"
+            className="border-zinc-300 rounded-none bg-zinc-50 focus:bg-white focus:ring-1 focus:ring-zinc-900 font-mono text-xs normal-case tracking-normal px-2 py-1 outline-none max-w-xs transition-colors"
           >
             <option value="">All Campaigns</option>
             {campaigns.map(c => (
@@ -181,14 +183,14 @@ export default function Search() {
       </div>
 
       {loading ? (
-        <div className="text-center py-12 text-gray-500">Searching...</div>
+        <div className="text-center py-16 text-zinc-500 font-mono text-sm uppercase tracking-widest border border-dashed border-zinc-300">Searching...</div>
       ) : results.length > 0 ? (
         <>
-          <div className="text-gray-500 text-sm mb-4">
+          <div className="text-zinc-500 font-mono text-xs uppercase tracking-widest mb-4">
             {total} result{total !== 1 ? 's' : ''} for "{q}"
           </div>
           
-          <div className="space-y-3 mb-6">
+          <div className="space-y-4 mb-8">
             {results.map(r => {
               const domain = r.email?.split('@')[1]?.toLowerCase()
               const blocked = domain && blockedDomains.includes(domain)
@@ -196,44 +198,44 @@ export default function Search() {
                 <div 
                   key={r.id} 
                   onClick={() => setSelectedEmail(r.email)}
-                  className={`border bg-white rounded-lg p-4 hover:bg-gray-50 cursor-pointer transition-colors shadow-sm ${
-                    blocked ? 'border-red-200 bg-red-50' : 'border-gray-200'
+                  className={`border bg-white rounded-none p-5 hover:bg-zinc-50 cursor-pointer transition-colors ${
+                    blocked ? 'border-red-300 bg-red-50/50' : 'border-zinc-200'
                   }`}
                 >
                   <div className="flex items-start justify-between">
                     <div>
-                      <span className="font-medium text-gray-900">{r.email}</span>
+                      <span className="font-display font-bold text-zinc-950 text-lg">{r.email}</span>
                       {r.name && (
-                        <span className="text-gray-500 text-sm ml-2">({r.name})</span>
+                        <span className="text-zinc-500 font-mono text-sm ml-3">({r.name})</span>
                       )}
                       {blocked && (
-                        <span className="ml-2 text-xs bg-red-100 text-red-500 px-1.5 py-0.5 rounded">blocked</span>
+                        <span className="ml-3 text-[10px] font-mono bg-red-100 border border-red-200 text-red-700 px-2 py-0.5 uppercase tracking-widest inline-block -translate-y-0.5">BLOCKED</span>
                       )}
                     </div>
-                    <div className="flex items-center gap-2" onClick={e => e.stopPropagation()}>
+                    <div className="flex items-center gap-3" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => toggleDomainBlock(domain)}
-                        className={`text-xs px-2 py-1 rounded border transition-all ${
+                        className={`text-[10px] font-mono px-2.5 py-1 rounded-none border transition-colors uppercase tracking-widest ${
                           blocked
-                            ? 'bg-red-100 text-red-600 border-red-300 hover:bg-red-200'
-                            : 'bg-gray-100 text-gray-500 border-gray-300 hover:bg-red-50 hover:text-red-400'
+                            ? 'bg-red-50 text-red-700 border-red-300 hover:bg-red-100'
+                            : 'bg-zinc-50 text-zinc-600 border-zinc-300 hover:bg-red-50 hover:border-red-300 hover:text-red-700'
                         }`}
                         title={blocked ? 'Click to unblock this domain' : 'Block this company\'s domain'}
                       >
-                        {blocked ? '🚫 Blocked' : 'Block Domain'}
+                        {blocked ? 'UNBLOCK' : 'BLOCK DOMAIN'}
                       </button>
                       <StatusBadge status={r.reply_status || r.send_status} />
                     </div>
                   </div>
-                  <div className="text-sm text-gray-500 mt-1">
-                    {r.campaign_name} · Sent {new Date(r.sent_at).toLocaleDateString()}
+                  <div className="text-xs font-mono text-zinc-500 mt-2">
+                    {r.campaign_name} · <span className="text-zinc-400">Sent {new Date(r.sent_at).toLocaleDateString()}</span>
                   </div>
-                  <div className="text-sm text-gray-400 mt-1 truncate">
+                  <div className="text-sm text-zinc-600 mt-3 truncate max-w-2xl bg-zinc-50 p-2 border border-zinc-100 font-mono">
                     {r.subject}
                   </div>
                   {r.reply_content ? (
-                    <div className="text-xs text-green-600 font-medium mt-2 flex items-center gap-1">
-                      <span>💬</span> Has reply
+                    <div className="text-[10px] font-mono text-emerald-700 font-bold mt-3 flex items-center gap-1.5 uppercase tracking-widest border border-emerald-200 bg-emerald-50 inline-flex px-2 py-1">
+                      HAS REPLY
                     </div>
                   ) : null}
                 </div>
@@ -242,65 +244,70 @@ export default function Search() {
           </div>
           
           {totalPages > 1 && (
-            <div className="flex justify-between items-center bg-white p-3 border border-gray-200 rounded-lg shadow-sm mb-8">
+            <div className="flex justify-between items-center bg-zinc-50 p-4 border border-zinc-200 rounded-none mb-8">
               <button 
                 onClick={() => setPage(Math.max(1, page - 1))}
                 disabled={page === 1}
-                className="px-3 py-1 text-sm border rounded text-gray-600 disabled:opacity-50"
+                className="px-4 py-1.5 text-[10px] font-mono border border-zinc-300 bg-white rounded-none text-zinc-700 disabled:opacity-50 hover:bg-zinc-100 uppercase tracking-widest"
               >
-                ← Prev
+                Prev
               </button>
-              <span className="text-sm text-gray-600">Page {page} of {totalPages}</span>
+              <span className="text-xs font-mono text-zinc-500 uppercase tracking-widest">Page {page} of {totalPages}</span>
               <button 
                 onClick={() => setPage(Math.min(totalPages, page + 1))}
                 disabled={page === totalPages}
-                className="px-3 py-1 text-sm border rounded text-gray-600 disabled:opacity-50"
+                className="px-4 py-1.5 text-[10px] font-mono border border-zinc-300 bg-white rounded-none text-zinc-700 disabled:opacity-50 hover:bg-zinc-100 uppercase tracking-widest"
               >
-                Next →
+                Next
               </button>
             </div>
           )}
         </>
       ) : q ? (
-        <div className="text-center py-12 text-gray-500 bg-gray-50 rounded-lg border border-gray-200">
+        <div className="text-center py-16 font-mono text-sm text-zinc-500 bg-zinc-50 border border-dashed border-zinc-300">
           No contacts found for "{q}"
         </div>
       ) : null}
 
       {/* Re-engagement Candidates Section */}
       {reengagementData.length > 0 && (
-        <div className="mt-12">
+        <div className="mt-12 pt-8 border-t border-zinc-200">
           <button 
             type="button"
             onClick={() => setShowReengagement(!showReengagement)}
-            className="flex items-center gap-2 text-lg font-medium text-gray-900 mb-4 focus:outline-none w-full text-left bg-gray-100 p-3 rounded-md hover:bg-gray-200 transition-colors"
+            className="flex items-center justify-between w-full p-4 bg-zinc-50 border border-zinc-200 hover:bg-zinc-100 transition-colors group"
           >
-            <span className={`transform transition-transform ${showReengagement ? 'rotate-90' : ''}`}>▶</span>
-            Re-engagement Candidates ({reengagementData.length} contacts)
+            <span className="font-display font-bold text-zinc-950 uppercase tracking-widest text-sm">
+              Re-engagement Candidates
+              <span className="ml-3 text-[10px] font-mono bg-zinc-200 px-2 py-0.5 text-zinc-600 border border-zinc-300">{reengagementData.length}</span>
+            </span>
+            <span className={`text-zinc-400 font-mono transform transition-transform ${showReengagement ? 'rotate-90' : ''}`}>
+              [+]
+            </span>
           </button>
           
           {showReengagement ? (
-            <div className="pl-6 border-l-2 border-indigo-100 space-y-4 pt-2">
-              <p className="text-sm text-gray-500 mb-4">
-                Emailed 14–60 days ago · No reply or Check Back · No follow-up sent
+            <div className="mt-4 border-l-4 border-indigo-500 pl-6 space-y-4 py-2">
+              <p className="text-[11px] font-mono text-zinc-500 uppercase tracking-widest mb-6">
+                Conditions: Emailed 14–60 days ago · No reply or Check Back · No follow-up sent
               </p>
               
-              <div className="grid gap-3">
+              <div className="grid gap-4">
                 {reengagementData.map((cand, idx) => (
-                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between p-3 border border-indigo-100 bg-white rounded shadow-sm gap-3 hover:border-indigo-300">
+                  <div key={idx} className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border border-zinc-200 bg-white hover:border-zinc-400 transition-colors gap-4">
                     <div>
-                      <div className="font-medium text-gray-900">{cand.email}</div>
-                      <div className="text-xs text-gray-500 mt-1">
-                        {cand.campaign_name} · {new Date(cand.sent_at).toLocaleDateString()}
+                      <div className="font-display font-bold text-zinc-900">{cand.email}</div>
+                      <div className="text-[11px] font-mono text-zinc-500 mt-1 uppercase tracking-wider">
+                        {cand.campaign_name} <span className="mx-2 text-zinc-300">|</span> {new Date(cand.sent_at).toLocaleDateString()}
                       </div>
                     </div>
                     <div className="flex items-center gap-4">
                       <StatusBadge status={cand.reply_status} />
                       <Link 
                         to={`/campaign/${cand.campaign_id}`}
-                        className="text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 font-medium rounded hover:bg-indigo-100 transition-colors whitespace-nowrap"
+                        className="text-[10px] font-mono px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-200 hover:bg-indigo-100 transition-colors uppercase tracking-widest whitespace-nowrap"
                       >
-                        Follow up →
+                        Follow up
                       </Link>
                     </div>
                   </div>

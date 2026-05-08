@@ -108,8 +108,10 @@ export default function Profile({ onSave }) {
   }
 
   return (
-    <div id="profile-page" className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">My Profile</h1>
+    <div id="profile-page" className="max-w-2xl mx-auto pb-12">
+      <div className="mb-8 pb-4 border-b border-zinc-200">
+        <h1 className="text-3xl font-display font-bold text-zinc-950 tracking-tight">My Profile</h1>
+      </div>
 
       {flash ? (
         <div className="flash-message mb-4 p-3 bg-green-50 border border-green-200 text-green-700 rounded-md text-sm">
@@ -123,7 +125,7 @@ export default function Profile({ onSave }) {
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-6">
         <Field label="Full Name *" name="name" value={form.name} onChange={handleChange} required />
         <Field label="College / University *" name="college" value={form.college} onChange={handleChange} required />
         <Field label="Branch / Department *" name="branch" value={form.branch} onChange={handleChange} placeholder="e.g., Chemical Engineering" required />
@@ -134,7 +136,7 @@ export default function Profile({ onSave }) {
         <Field label="LinkedIn Profile URL" name="linkedin" value={form.linkedin} onChange={handleChange} placeholder="https://linkedin.com/in/username" />
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+          <label className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-1.5">
             About Me / Short Bio *
           </label>
           <textarea
@@ -145,67 +147,69 @@ export default function Profile({ onSave }) {
             rows={3}
             required
             placeholder="2–3 sentences about yourself"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm font-mono leading-relaxed focus:ring-1 focus:ring-zinc-900 outline-none bg-zinc-50 focus:bg-white transition-colors"
           />
         </div>
 
         {/* Resume Upload */}
-        <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1">
+        <div className="pt-2">
+          <label className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-2">
             Resume (PDF, max 5MB)
           </label>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3">
             <input
               id="resume-upload"
               type="file"
               accept=".pdf"
               onChange={handleResumeUpload}
-              className="text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-gray-300 file:text-sm file:font-medium file:bg-white file:text-gray-700 hover:file:bg-gray-50"
+              className="text-[11px] font-mono text-zinc-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-none file:border file:border-zinc-300 file:bg-zinc-100 file:text-zinc-700 hover:file:bg-zinc-200 transition-colors file:uppercase file:tracking-wider file:font-bold file:cursor-pointer"
             />
             {uploading ? (
-              <span className="text-sm text-gray-500">Uploading...</span>
+              <span className="text-[11px] font-mono text-zinc-500 uppercase tracking-wider animate-pulse">Uploading...</span>
             ) : null}
             {hasResume ? (
-              <span className="text-sm text-green-600">✓ Resume uploaded</span>
+              <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 uppercase tracking-wider">✓ Uploaded</span>
             ) : null}
           </div>
         </div>
 
-        <button
-          id="save-profile-btn"
-          type="submit"
-          disabled={saving}
-          className="w-full py-2.5 bg-indigo-600 text-white font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
-          {saving ? 'Saving...' : 'Save Profile'}
-        </button>
+        <div className="pt-6 border-t border-zinc-200">
+          <button
+            id="save-profile-btn"
+            type="submit"
+            disabled={saving}
+            className="w-full py-3.5 bg-indigo-700 text-white font-display font-bold uppercase tracking-widest text-sm rounded-none hover:bg-indigo-800 disabled:opacity-50 disabled:bg-zinc-400 transition-colors"
+          >
+            {saving ? 'Saving...' : 'Save Profile'}
+          </button>
+        </div>
       </form>
 
       {/* Resume Analysis Section */}
       {hasResume && (
-        <div className="mt-8 border-t border-gray-200 pt-8">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="text-xl font-bold text-gray-900">Resume Analysis</h2>
+        <div className="mt-12 border-t border-zinc-200 pt-8">
+          <div className="flex items-center justify-between mb-6 pb-2 border-b border-zinc-100">
+            <h2 className="text-xl font-display font-bold text-zinc-950 uppercase tracking-wide">Resume Analysis</h2>
             <button
               onClick={handleReparse}
               disabled={parsing}
-              className="text-xs font-medium text-indigo-600 hover:text-indigo-800 disabled:opacity-50"
+              className="text-[10px] font-mono font-medium text-indigo-700 hover:bg-indigo-50 px-2 py-1 border border-indigo-200 disabled:opacity-50 transition-colors uppercase tracking-wider"
             >
-              {parsing ? 'Parsing...' : '↻ Re-parse Resume'}
+              {parsing ? 'Parsing...' : 'Re-parse Resume'}
             </button>
           </div>
 
           {!resumeParsed || Object.keys(resumeParsed).length === 0 ? (
-            <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-              <p className="text-sm text-yellow-700">
-                Resume has not been analyzed yet. Make sure your Groq API key is set in Settings, then click "Re-parse Resume".
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-none">
+              <p className="text-xs font-mono text-amber-800">
+                <span className="font-bold uppercase tracking-wider">Note:</span> Resume has not been analyzed yet. Make sure your Groq API key is set in Settings, then click "Re-parse Resume".
               </p>
             </div>
           ) : (
             <div className="space-y-6">
-              <div className="bg-gray-50 rounded-lg p-4 border border-gray-100">
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-2">Professional Summary</h3>
-                <p className="text-sm text-gray-600 italic">"{resumeParsed.summary}"</p>
+              <div className="bg-zinc-50 p-5 border border-zinc-200">
+                <h3 className="text-[10px] font-display font-bold text-zinc-500 uppercase tracking-widest mb-3">Professional Summary</h3>
+                <p className="text-sm font-mono text-zinc-700 leading-relaxed bg-white border border-zinc-200 p-4">"{resumeParsed.summary}"</p>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -213,19 +217,19 @@ export default function Profile({ onSave }) {
                 <AnalysisCard title="Experience" items={resumeParsed.experience} type="experience" />
               </div>
 
-              <div className="bg-white rounded-lg p-4 border border-gray-200">
-                <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-2">Achievements & Skills</h3>
-                <div className="flex flex-wrap gap-2 mb-3">
+              <div className="bg-white p-5 border border-zinc-200">
+                <h3 className="text-[10px] font-display font-bold text-zinc-500 uppercase tracking-widest mb-3">Achievements & Skills</h3>
+                <div className="flex flex-wrap gap-2 mb-4">
                   {resumeParsed.skills?.map((skill, i) => (
-                    <span key={i} className="px-2 py-1 bg-indigo-50 text-indigo-700 rounded text-xs font-medium border border-indigo-100">
+                    <span key={i} className="px-2 py-1 bg-indigo-50 text-indigo-800 text-[10px] font-mono border border-indigo-200 uppercase tracking-wider">
                       {skill}
                     </span>
                   ))}
                 </div>
-                <ul className="space-y-1">
+                <ul className="space-y-2 border-t border-zinc-100 pt-4">
                   {resumeParsed.achievements?.map((ach, i) => (
-                    <li key={i} className="text-sm text-gray-600 flex gap-2">
-                      <span className="text-indigo-400">•</span> {ach}
+                    <li key={i} className="text-xs font-mono text-zinc-700 flex gap-3">
+                      <span className="text-indigo-400 select-none">→</span> {ach}
                     </li>
                   ))}
                 </ul>
@@ -242,18 +246,18 @@ function AnalysisCard({ title, items, type }) {
   if (!items || items.length === 0) return null
   
   return (
-    <div className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
-      <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-wider mb-3">{title}</h3>
-      <div className="space-y-3">
+    <div className="bg-white p-5 border border-zinc-200">
+      <h3 className="text-[10px] font-display font-bold text-zinc-500 uppercase tracking-widest mb-4">{title}</h3>
+      <div className="space-y-4">
         {items.map((item, i) => (
-          <div key={i} className="border-l-2 border-indigo-100 pl-3">
-            <h4 className="text-sm font-bold text-gray-800">
+          <div key={i} className="border-l-2 border-indigo-200 pl-3">
+            <h4 className="text-xs font-display font-bold text-zinc-900 uppercase tracking-wider mb-0.5">
               {type === 'project' ? item.title : `${item.role} @ ${item.organization}`}
             </h4>
-            <p className="text-xs text-gray-500 mb-1">
+            <p className="text-[10px] font-mono text-zinc-400 uppercase tracking-widest mb-1.5">
               {type === 'experience' && item.duration}
             </p>
-            <p className="text-xs text-gray-600 line-clamp-2">{item.description}</p>
+            <p className="text-xs font-mono text-zinc-600 leading-relaxed">{item.description}</p>
           </div>
         ))}
       </div>
@@ -264,7 +268,7 @@ function AnalysisCard({ title, items, type }) {
 function Field({ label, name, value, onChange, placeholder, required }) {
   return (
     <div>
-      <label htmlFor={`field-${name}`} className="block text-sm font-medium text-gray-700 mb-1">
+      <label htmlFor={`field-${name}`} className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-1.5">
         {label}
       </label>
       <input
@@ -275,7 +279,7 @@ function Field({ label, name, value, onChange, placeholder, required }) {
         onChange={onChange}
         placeholder={placeholder}
         required={required}
-        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+        className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm font-mono focus:ring-1 focus:ring-zinc-900 outline-none bg-zinc-50 focus:bg-white placeholder-zinc-400 transition-colors"
       />
     </div>
   )

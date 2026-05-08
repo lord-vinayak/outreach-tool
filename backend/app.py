@@ -18,6 +18,34 @@ from email_sender import send_email
 from ai_generator import generate_email, generate_followup, generate_contextual_followup
 from resume_parser import parse_resume
 
+import itertools
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+
+# Round-robin key management
+_groq_key_cycle = None
+_groq_key_cycle_lock = threading.Lock()
+
+def get_groq_key_cycle(config):
+    """
+    Build a round-robin iterator from all non-empty Groq keys in config.
+    Returns an itertools.cycle over the available keys.
+    Always returns at least one key (groq_api_key must exist).
+    """
+    keys = []
+    for field in ["groq_api_key", "groq_api_key_2", "groq_api_key_3"]:
+        val = config.get(field, "").strip()
+        if val:
+            keys.append(val)
+    if not keys:
+        raise ValueError("No Groq API key configured. Go to Settings.")
+    return itertools.cycle(keys)
+
+def get_next_groq_key(cycle):
+    """Thread-safe: get next key from the round-robin cycle."""
+    with _groq_key_cycle_lock:
+        return next(cycle)
+
 app = Flask(__name__)
 CORS(app)
 
@@ -26,6 +54,16 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # In-memory progress tracking for send jobs
 send_progress = {}
+
+generation_progress = {}
+# Structure per campaign_id:
+# {
+#   "total": 10,
+#   "completed": 0,
+#   "failed": 0,
+#   "status": "generating" | "complete" | "error",
+#   "errors": []
+# }
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from inbox_monitor import run_inbox_monitor
@@ -179,6 +217,8 @@ def get_settings():
         "gmail_address": config.get("gmail_address", ""),
         "has_gmail_password": bool(config.get("gmail_app_password", "")),
         "has_groq_key": bool(config.get("groq_api_key", "")),
+        "groq_api_key_2": config.get("groq_api_key_2", ""),
+        "groq_api_key_3": config.get("groq_api_key_3", ""),
         "send_delay_seconds": config.get("send_delay_seconds", 60),
         "is_complete": is_settings_complete(config),
     })
@@ -198,6 +238,10 @@ def save_settings():
         config["gmail_app_password"] = data["gmail_app_password"]
     if "groq_api_key" in data and data["groq_api_key"]:
         config["groq_api_key"] = data["groq_api_key"]
+    if "groq_api_key_2" in data:
+        config["groq_api_key_2"] = data["groq_api_key_2"]
+    if "groq_api_key_3" in data:
+        config["groq_api_key_3"] = data["groq_api_key_3"]
     if "send_delay_seconds" in data:
         delay = int(data["send_delay_seconds"])
         config["send_delay_seconds"] = max(20, min(90, delay))
@@ -216,6 +260,7 @@ def list_campaigns():
                COUNT(r.id) as total_recipients,
                SUM(CASE WHEN r.status = 'sent' THEN 1 ELSE 0 END) as sent_count,
                SUM(CASE WHEN r.status = 'failed' THEN 1 ELSE 0 END) as failed_count,
+               SUM(CASE WHEN r.status = 'draft' AND r.subject IS NOT NULL THEN 1 ELSE 0 END) as draft_count,
                (
                    SELECT COUNT(*) FROM followups f
                    JOIN recipients r2 ON f.recipient_id = r2.id
@@ -307,32 +352,65 @@ def create_campaign():
 
 @app.route("/api/campaign/<int:campaign_id>/generate", methods=["POST"])
 def generate_campaign_emails(campaign_id):
-    """Generate AI emails for all draft recipients in a campaign."""
     config = load_config()
-
-    if not config.get("groq_api_key"):
+    
+    # Validate at least one Groq key exists
+    primary_key = config.get("groq_api_key", "").strip()
+    if not primary_key:
         return jsonify({"error": "Groq API key not configured. Go to Settings."}), 400
-
-    campaign = query_db(
-        "SELECT * FROM campaigns WHERE id = ?", (campaign_id,), one=True
-    )
+    
+    campaign = query_db("SELECT * FROM campaigns WHERE id = ?", (campaign_id,), one=True)
     if not campaign:
         return jsonify({"error": "Campaign not found"}), 404
-
+    
     recipients = query_db(
         "SELECT * FROM recipients WHERE campaign_id = ? AND status = 'draft'",
-        (campaign_id,),
+        (campaign_id,)
     )
     if not recipients:
         return jsonify({"error": "No draft recipients to generate emails for"}), 400
-
+    
+    # Initialize progress
+    generation_progress[campaign_id] = {
+        "total": len(recipients),
+        "completed": 0,
+        "failed": 0,
+        "status": "generating",
+        "errors": []
+    }
+    
+    # Build round-robin cycle from all available keys
+    key_cycle = get_groq_key_cycle(config)
+    
     profile = config.get("profile", {})
-    api_key = config["groq_api_key"]
     resume_parsed = config.get("resume_parsed", {})
-    errors = []
+    
+    # Start parallel generation in background thread
+    thread = threading.Thread(
+        target=_generate_emails_parallel,
+        args=(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle),
+        daemon=True
+    )
+    thread.start()
+    
+    return jsonify({
+        "message": "Generation started",
+        "total": len(recipients)
+    })
 
-    conn = get_db()
-    for r in recipients:
+def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle):
+    """
+    Background function: generates emails for all recipients in parallel
+    using ThreadPoolExecutor. Each worker picks the next key from the
+    round-robin cycle in a thread-safe manner.
+    """
+    progress = generation_progress[campaign_id]
+    
+    num_workers = min(len(recipients), 10)
+    
+    def generate_one(r):
+        """Generate email for a single recipient. Returns (recipient_id, result_or_error)."""
+        api_key = get_next_groq_key(key_cycle)
         try:
             result = generate_email(
                 profile=profile,
@@ -342,23 +420,53 @@ def generate_campaign_emails(campaign_id):
                 api_key=api_key,
                 resume_parsed=resume_parsed
             )
-            conn.execute(
-                "UPDATE recipients SET subject = ?, email_body = ? WHERE id = ?",
-                (result["subject"], result["body"], r["id"]),
-            )
-            conn.commit()
+            return r["id"], r["email"], result, None
         except Exception as e:
-            err_msg = str(e)
-            errors.append({"email": r["email"], "error": err_msg})
-            if "daily rate limit" in err_msg.lower():
-                break
+            return r["id"], r["email"], None, str(e)
+    
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(generate_one, r): r for r in recipients}
+        
+        conn = get_db()
+        try:
+            for future in as_completed(futures):
+                recipient_id, email, result, error = future.result()
+                
+                if error:
+                    progress["failed"] += 1
+                    progress["errors"].append({"email": email, "error": error})
+                    
+                    if "daily rate limit" in error.lower():
+                        progress["status"] = "error"
+                        for f in futures:
+                            f.cancel()
+                        break
+                else:
+                    conn.execute(
+                        "UPDATE recipients SET subject = ?, email_body = ? WHERE id = ?",
+                        (result["subject"], result["body"], recipient_id)
+                    )
+                    conn.commit()
+                    progress["completed"] += 1
+        finally:
+            conn.close()
+    
+    if progress["status"] != "error":
+        progress["status"] = "complete"
 
-    conn.close()
-
-    return jsonify({
-        "message": f"Generated emails for {len(recipients) - len(errors)} recipients",
-        "errors": errors,
-    })
+@app.route("/api/campaign/<int:campaign_id>/generate-progress", methods=["GET"])
+def get_generation_progress(campaign_id):
+    """Poll endpoint for email generation progress."""
+    progress = generation_progress.get(campaign_id)
+    if not progress:
+        return jsonify({
+            "status": "idle",
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "errors": []
+        })
+    return jsonify(progress)
 
 
 @app.route("/api/campaign/<int:campaign_id>/preview", methods=["GET"])
@@ -638,7 +746,9 @@ def delete_campaign(campaign_id):
 @app.route("/api/campaign/<int:campaign_id>/generate-followups", methods=["POST"])
 def generate_followups(campaign_id):
     config = load_config()
-    if not config.get("groq_api_key"):
+    
+    primary_key = config.get("groq_api_key", "").strip()
+    if not primary_key:
         return jsonify({"error": "Groq API key not configured"}), 400
 
     data = request.json or {}
@@ -659,13 +769,37 @@ def generate_followups(campaign_id):
     if not recipients:
         return jsonify({"error": "No recipients eligible for follow-up"}), 400
 
-    profile = config.get("profile", {})
-    api_key = config["groq_api_key"]
-    resume_parsed = config.get("resume_parsed", {})
-    errors = []
+    progress_key = f"{campaign_id}_followup"
+    generation_progress[progress_key] = {
+        "total": len(recipients),
+        "completed": 0,
+        "failed": 0,
+        "status": "generating",
+        "errors": []
+    }
 
-    conn = get_db()
-    for r in recipients:
+    key_cycle = get_groq_key_cycle(config)
+    profile = config.get("profile", {})
+    resume_parsed = config.get("resume_parsed", {})
+
+    thread = threading.Thread(
+        target=_generate_followups_parallel,
+        args=(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context, progress_key),
+        daemon=True
+    )
+    thread.start()
+
+    return jsonify({
+        "message": "Follow-up generation started",
+        "total": len(recipients)
+    })
+
+def _generate_followups_parallel(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context, progress_key):
+    progress = generation_progress[progress_key]
+    num_workers = min(len(recipients), 10)
+    
+    def generate_one(r):
+        api_key = get_next_groq_key(key_cycle)
         try:
             result = generate_contextual_followup(
                 profile=profile,
@@ -680,33 +814,52 @@ def generate_followups(campaign_id):
                 api_key=api_key,
                 resume_parsed=resume_parsed
             )
-            conn.execute(
-                "INSERT INTO followups (recipient_id, subject, email_body, status) VALUES (?, ?, ?, 'draft')",
-                (r["id"], result["subject"], result["body"]),
-            )
-            conn.commit()
+            return r["id"], r["email"], result, None
         except Exception as e:
-            err_msg = str(e)
-            errors.append({"email": r["email"], "error": err_msg})
-            if "daily rate limit" in err_msg.lower():
-                break
+            return r["id"], r["email"], None, str(e)
 
-    conn.close()
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(generate_one, r): r for r in recipients}
+        
+        conn = get_db()
+        try:
+            for future in as_completed(futures):
+                recipient_id, email, result, error = future.result()
+                
+                if error:
+                    progress["failed"] += 1
+                    progress["errors"].append({"email": email, "error": error})
+                    
+                    if "daily rate limit" in error.lower():
+                        progress["status"] = "error"
+                        for f in futures:
+                            f.cancel()
+                        break
+                else:
+                    conn.execute(
+                        "INSERT INTO followups (recipient_id, subject, email_body, status) VALUES (?, ?, ?, 'draft')",
+                        (recipient_id, result["subject"], result["body"])
+                    )
+                    conn.commit()
+                    progress["completed"] += 1
+        finally:
+            conn.close()
+    
+    if progress["status"] != "error":
+        progress["status"] = "complete"
 
-    generated = query_db("""
-        SELECT f.*, r.email as recipient_email, r.name as recipient_name, r.message_id as original_message_id, r.reply_status
-        FROM followups f
-        JOIN recipients r ON r.id = f.recipient_id
-        WHERE r.campaign_id = ? AND f.status = 'draft'
-        ORDER BY f.id DESC
-    """, (campaign_id,))
-
-    return jsonify({
-        "message": f"Generated follow-ups for {len(recipients) - len(errors)} recipients",
-        "errors": errors,
-        "campaign_id": campaign_id,
-        "followups": generated
-    })
+@app.route("/api/campaign/<int:campaign_id>/generate-followup-progress", methods=["GET"])
+def get_followup_generate_progress(campaign_id):
+    progress = generation_progress.get(f"{campaign_id}_followup")
+    if not progress:
+        return jsonify({
+            "status": "idle",
+            "total": 0,
+            "completed": 0,
+            "failed": 0,
+            "errors": []
+        })
+    return jsonify(progress)
 
 
 @app.route("/api/campaign/<int:campaign_id>/followup/preview", methods=["GET"])
@@ -892,7 +1045,7 @@ def _send_followup_thread(campaign_id, followups, config, resume_path, progress_
 
 
 @app.route("/api/campaign/<int:campaign_id>/followup/progress", methods=["GET"])
-def get_followup_progress(campaign_id):
+def get_followup_send_progress(campaign_id):
     """Poll endpoint for follow-up send progress."""
     progress_key = f"{campaign_id}_followup"
     progress = send_progress.get(progress_key)
