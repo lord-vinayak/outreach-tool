@@ -13,7 +13,8 @@ export default function NewCampaign() {
   })
   const [parsedCount, setParsedCount] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [generating, setGenerating] = useState(false)
+  const [generationProgress, setGenerationProgress] = useState(null)
+  const [campaignId, setCampaignId] = useState(null)
   const [error, setError] = useState('')
   
   const [parsedEmails, setParsedEmails] = useState([])
@@ -138,59 +139,116 @@ export default function NewCampaign() {
       const createRes = await api.post('/campaign/new', form)
       const { campaign_id, recipients_count } = createRes.data
       setParsedCount(recipients_count)
+      setCampaignId(campaign_id)
 
       // Step 2: Generate emails
-      setGenerating(true)
+      setGenerationProgress({ total: recipients_count, completed: 0, failed: 0, status: "generating", errors: [] })
       const genRes = await api.post(`/campaign/${campaign_id}/generate`)
+      setGenerationProgress(prev => ({ ...prev, total: genRes.data.total }))
 
-      if (genRes.data.errors?.length > 0) {
-        setError(
-          `Generated with ${genRes.data.errors.length} error(s). You can regenerate individual emails in Preview.`
-        )
-      }
+      const interval = setInterval(async () => {
+        const progressRes = await api.get(`/campaign/${campaign_id}/generate-progress`);
+        const data = progressRes.data;
+        setGenerationProgress(data);
 
-      // Navigate to preview
-      navigate(`/campaign/${campaign_id}/preview`)
+        if (data.status === "complete" || data.status === "error") {
+          clearInterval(interval);
+          if (data.status === "complete") {
+            navigate(`/campaign/${campaign_id}/preview`)
+          }
+        }
+      }, 1500);
+
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to create campaign')
-      setLoading(false)
-      setGenerating(false)
+      setGenerationProgress(null);
+      setError(err.response?.data?.error || 'Failed to start generation');
+      setLoading(false);
     }
   }
 
   // Show generating state
-  if (generating) {
+  if (generationProgress) {
     return (
-      <div id="generating-screen" className="max-w-2xl mx-auto text-center py-16">
-        <div className="inline-block w-10 h-10 border-4 border-indigo-200 border-t-indigo-600 rounded-full animate-spin mb-4" />
-        <h2 className="text-xl font-semibold text-gray-900 mb-2">
-          Generating Emails...
-        </h2>
-        <p className="text-gray-500 text-sm">
-          Creating unique, personalized emails for {parsedCount} recipient{parsedCount !== 1 ? 's' : ''}.
-          This may take a minute.
-        </p>
-        {error ? (
-          <p className="mt-4 text-amber-600 text-sm">{error}</p>
+      <div id="generating-screen" className="max-w-2xl mx-auto text-center py-20 border border-zinc-200 bg-white mt-10">
+        <div className="generation-progress-box border border-gray-200 rounded-lg p-6 mt-4 mx-8 bg-gray-50 text-left shadow-sm">
+          {/* Header */}
+          <div className="flex justify-between items-center mb-3">
+            <span className="text-sm font-medium text-gray-700">
+              {generationProgress.status === "complete"
+                ? "✅ Generation Complete"
+                : generationProgress.status === "error"
+                ? "❌ Generation Stopped"
+                : "⚡ Generating Emails..."}
+            </span>
+            <span className="text-sm text-gray-500 font-mono">
+              {generationProgress.completed} / {generationProgress.total}
+            </span>
+          </div>
+          
+          {/* Progress bar track */}
+          <div className="w-full bg-gray-200 rounded-full h-2.5 mb-3 overflow-hidden">
+            <div
+              className="bg-green-500 h-2.5 rounded-full transition-all duration-500"
+              style={{
+                width: generationProgress.total > 0
+                  ? `${Math.round((generationProgress.completed / generationProgress.total) * 100)}%`
+                  : "0%"
+              }}
+            />
+          </div>
+          
+          {/* Sub-stats */}
+          <div className="flex gap-4 text-xs font-mono text-gray-500">
+            <span>✅ {generationProgress.completed} generated</span>
+            {generationProgress.failed > 0 && (
+              <span className="text-red-500">❌ {generationProgress.failed} failed</span>
+            )}
+            {generationProgress.status === "generating" && (
+              <span className="text-blue-500 animate-pulse ml-auto">Running in parallel...</span>
+            )}
+          </div>
+          
+          {/* Error list — only show if there are errors */}
+          {generationProgress.errors && generationProgress.errors.length > 0 && (
+            <div className="mt-4 text-[10px] font-mono text-red-600 bg-red-50 border border-red-200 rounded p-3 max-h-32 overflow-y-auto text-left">
+              <div className="font-bold mb-1">Errors encountered:</div>
+              {generationProgress.errors.map((e, i) => (
+                <div key={i} className="mb-1 truncate"><span className="font-semibold">{e.email}:</span> {e.error}</div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {generationProgress.status === "error" ? (
+          <div className="mt-8">
+            <button
+              onClick={() => navigate(`/campaign/${campaignId}/preview`)}
+              className="px-6 py-3 bg-indigo-700 text-white font-display font-bold uppercase tracking-widest text-xs hover:bg-indigo-800 transition-colors"
+            >
+              Continue to Preview
+            </button>
+          </div>
         ) : null}
       </div>
     )
   }
 
   return (
-    <div id="new-campaign-page" className="max-w-2xl mx-auto">
-      <h1 className="text-2xl font-bold text-gray-900 mb-6">New Campaign</h1>
+    <div id="new-campaign-page" className="max-w-2xl mx-auto pb-12">
+      <div className="mb-8 pb-4 border-b border-zinc-200">
+        <h1 className="text-3xl font-display font-bold text-zinc-950 tracking-tight">New Campaign</h1>
+      </div>
 
       {error ? (
-        <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-md text-sm">
+        <div className="mb-6 p-4 bg-red-50 border border-red-200 text-red-700 rounded-none text-sm font-mono">
           {error}
         </div>
       ) : null}
 
-      <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-6">
         {/* Campaign Name */}
         <div>
-          <label htmlFor="campaign-name" className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="campaign-name" className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2">
             Campaign Name *
           </label>
           <input
@@ -201,14 +259,15 @@ export default function NewCampaign() {
             onChange={handleChange}
             required
             placeholder="e.g., Summer Internship - ML Companies June 2026"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            className="w-full border border-zinc-300 rounded-none px-4 py-2.5 text-sm focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none placeholder-zinc-400 bg-zinc-50 focus:bg-white transition-colors"
           />
         </div>
 
         {/* Email List */}
         <div>
-          <label htmlFor="email-list" className="block text-sm font-medium text-gray-700 mb-1">
-            Email List * <span className="text-gray-400 font-normal">(paste emails in any format)</span>
+          <label htmlFor="email-list" className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            <span>Email List *</span>
+            <span className="text-zinc-500 font-mono normal-case tracking-normal text-[10px] bg-zinc-100 px-2 py-0.5 border border-zinc-200">paste any format</span>
           </label>
           <textarea
             id="email-list"
@@ -219,26 +278,29 @@ export default function NewCampaign() {
             required
             rows={6}
             placeholder={"john@company.com\njane.doe@startup.io, mark@techcorp.com\nAlice <alice@acme.com>\nBob Smith - bob@smith.com"}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            className="w-full border border-zinc-300 rounded-none px-4 py-3 text-sm font-mono leading-relaxed focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none placeholder-zinc-400 bg-zinc-50 focus:bg-white transition-colors"
           />
           
-          <div className="flex justify-between items-center mt-1">
-             <p className="text-xs text-gray-500">
-               Supports: one per line, comma-separated, space-separated, Name &lt;email&gt;, Name - email
+          <div className="flex justify-between items-center mt-2">
+             <p className="text-[11px] font-mono text-zinc-500">
+               Supports: newline, comma, space-separated, Name &lt;email&gt;
              </p>
-             <button type="button" onClick={() => checkDuplicates(form.email_list)} className="text-xs text-indigo-600 hover:text-indigo-800 font-medium bg-indigo-50 px-2 py-1 rounded transition-colors border border-indigo-100">Check Duplicates</button>
+             <button type="button" onClick={() => checkDuplicates(form.email_list)} className="text-[11px] font-mono font-medium text-indigo-700 hover:bg-indigo-50 px-2 py-1 rounded-none border border-indigo-200 transition-colors uppercase tracking-wider">
+               Check Duplicates
+             </button>
           </div>
           
           {parseSummary ? (
-            <div className="mt-3 text-xs font-medium text-emerald-700 bg-emerald-50 px-3 py-2 rounded-md border border-emerald-100 flex items-center gap-1.5">
+            <div className="mt-3 text-xs font-mono text-emerald-800 bg-zinc-50 px-4 py-2.5 rounded-none border border-zinc-200 border-l-2 border-l-emerald-500 flex items-center gap-2">
                {parseSummary}
             </div>
           ) : null}
 
           {blockedInPaste.length > 0 && (
-            <div className="text-sm text-red-600 bg-red-50 border border-red-300 rounded p-3 mt-2">
-              ⚠️ The following emails are from blocked domains and will be added but skipped during send:
-              <ul className="mt-1 list-disc list-inside">
+            <div className="text-xs font-mono text-red-800 bg-red-50 border border-red-200 rounded-none p-4 mt-3">
+              <span className="font-bold">⚠️ BLOCKED DOMAINS DETECTED</span>
+              <p className="mt-1 mb-2">The following emails are from blocked domains and will be skipped:</p>
+              <ul className="list-disc list-inside text-[11px]">
                 {blockedInPaste.map(e => (
                   <li key={e.email}>{e.email}</li>
                 ))}
@@ -258,7 +320,7 @@ export default function NewCampaign() {
 
         {/* Campaign Goal */}
         <div>
-          <label htmlFor="campaign-goal" className="block text-sm font-medium text-gray-700 mb-1">
+          <label htmlFor="campaign-goal" className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2">
             Campaign Goal / Description *
           </label>
           <textarea
@@ -269,14 +331,15 @@ export default function NewCampaign() {
             required
             rows={3}
             placeholder="e.g., Send emails asking for a summer internship in machine learning or chemical engineering roles"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            className="w-full border border-zinc-300 rounded-none px-4 py-3 text-sm leading-relaxed focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none placeholder-zinc-400 bg-zinc-50 focus:bg-white transition-colors"
           />
         </div>
 
         {/* Additional Context */}
         <div>
-          <label htmlFor="additional-context" className="block text-sm font-medium text-gray-700 mb-1">
-            Additional Context <span className="text-gray-400 font-normal">(optional)</span>
+          <label htmlFor="additional-context" className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            <span>Additional Context</span>
+            <span className="text-zinc-400 font-mono normal-case tracking-normal text-[10px]">optional</span>
           </label>
           <textarea
             id="additional-context"
@@ -285,18 +348,20 @@ export default function NewCampaign() {
             onChange={handleChange}
             rows={2}
             placeholder="e.g., Mention that I'm available from May to July 2026"
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+            className="w-full border border-zinc-300 rounded-none px-4 py-3 text-sm leading-relaxed focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none placeholder-zinc-400 bg-zinc-50 focus:bg-white transition-colors"
           />
         </div>
 
-        <button
-          id="create-campaign-btn"
-          type="submit"
-          disabled={loading}
-          className="w-full py-2.5 bg-indigo-600 text-white font-medium rounded-md hover:bg-indigo-700 disabled:opacity-50 transition-colors"
-        >
-          {loading ? 'Creating...' : 'Create Campaign & Generate Emails'}
-        </button>
+        <div className="pt-4 border-t border-zinc-200">
+          <button
+            id="create-campaign-btn"
+            type="submit"
+            disabled={loading || generationProgress?.status === "generating"}
+            className="w-full py-3.5 bg-indigo-700 text-white font-display font-bold uppercase tracking-widest text-sm rounded-none hover:bg-indigo-800 disabled:opacity-50 disabled:bg-zinc-400 transition-colors"
+          >
+            {generationProgress?.status === "generating" ? 'Generating...' : 'Create Campaign & Generate'}
+          </button>
+        </div>
       </form>
     </div>
   )

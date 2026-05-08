@@ -21,7 +21,7 @@ export default function CampaignDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [followupContext, setFollowupContext] = useState('')
-  const [generating, setGenerating] = useState(false)
+  const [generationProgress, setGenerationProgress] = useState(null)
   const [expanded, setExpanded] = useState({})
   const [replyExpanded, setReplyExpanded] = useState({})
   const [showDeliveryIssues, setShowDeliveryIssues] = useState(false)
@@ -61,18 +61,32 @@ export default function CampaignDetail() {
 
   const handleFollowUp = async () => {
     if (eligibleRecipients.length === 0) return;
-    setGenerating(true)
+    setGenerationProgress({ total: eligibleRecipients.length, completed: 0, failed: 0, status: "generating", errors: [] })
     setError('')
 
     try {
-      await api.post(`/campaign/${campaignId}/generate-followups`, {
+      const res = await api.post(`/campaign/${campaignId}/generate-followups`, {
         global_context: followupContext,
         recipient_ids: eligibleRecipients.map(r => r.id)
       })
-      navigate(`/campaign/${campaignId}/followup/preview`)
+      setGenerationProgress(prev => ({ ...prev, total: res.data.total }))
+
+      const interval = setInterval(async () => {
+        const progressRes = await api.get(`/campaign/${campaignId}/generate-followup-progress`);
+        const data = progressRes.data;
+        setGenerationProgress(data);
+
+        if (data.status === "complete" || data.status === "error") {
+          clearInterval(interval);
+          if (data.status === "complete") {
+            navigate(`/campaign/${campaignId}/followup/preview`)
+          }
+        }
+      }, 1500);
+
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to generate follow-ups')
-      setGenerating(false)
+      setGenerationProgress(null)
     }
   }
 
@@ -120,14 +134,14 @@ export default function CampaignDetail() {
   return (
     <div id="campaign-detail-page" className="max-w-4xl mx-auto">
       {/* Campaign Info */}
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">{campaign.name}</h1>
-        <p className="text-sm text-gray-500 mt-1">
+      <div className="mb-8 pb-6 border-b border-zinc-200">
+        <h1 className="text-3xl font-display font-bold text-zinc-950 tracking-tight">{campaign.name}</h1>
+        <p className="text-sm text-zinc-500 font-mono mt-2">
           Created {new Date(campaign.created_at).toLocaleString()}
         </p>
-        <p className="text-sm text-gray-700 mt-2">{campaign.goal}</p>
+        <p className="text-sm text-zinc-700 mt-4 max-w-2xl">{campaign.goal}</p>
         {campaign.additional_context ? (
-          <p className="text-sm text-gray-500 mt-1 italic">{campaign.additional_context}</p>
+          <p className="text-sm text-zinc-500 mt-2 italic border-l-2 border-zinc-300 pl-3">{campaign.additional_context}</p>
         ) : null}
       </div>
 
@@ -150,15 +164,17 @@ export default function CampaignDetail() {
       )}
 
       {/* Follow-up Summary Bar */}
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6">
+      <div className="bg-zinc-50 border border-zinc-200 border-l-4 border-l-amber-500 rounded-none p-5 mb-8">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
           <div>
-            <h3 className="font-semibold text-amber-900 mb-1">📋 Follow-up Summary</h3>
-            <div className="text-sm text-amber-800 flex gap-4 flex-wrap">
-              <span>No Reply: {summary.no_reply}</span>
-              <span>Check Back: {summary.check_back}</span>
-              <span>Interested: {summary.interested}</span>
-              <span>Excluded: {summary.excluded}</span>
+            <h3 className="font-display font-semibold text-zinc-950 mb-1 flex items-center gap-2">
+              <span className="text-amber-600 font-mono text-xs border border-amber-200 bg-amber-50 px-1 py-0.5 leading-none">ACTION</span> Follow-up Summary
+            </h3>
+            <div className="text-sm text-zinc-600 flex gap-4 flex-wrap font-mono mt-3">
+              <span>No Reply: <strong className="text-zinc-900">{summary.no_reply}</strong></span>
+              <span>Check Back: <strong className="text-zinc-900">{summary.check_back}</strong></span>
+              <span>Interested: <strong className="text-green-700">{summary.interested}</strong></span>
+              <span>Excluded: <strong className="text-red-700">{summary.excluded}</strong></span>
             </div>
           </div>
         </div>
@@ -170,15 +186,70 @@ export default function CampaignDetail() {
               value={followupContext}
               onChange={(e) => setFollowupContext(e.target.value)}
               placeholder="Any additional context for this follow-up batch? (optional)"
-              className="w-full border border-amber-300 rounded-md px-3 py-2 text-sm mb-3 focus:ring-2 focus:ring-amber-500 focus:border-amber-500 outline-none bg-white"
+              className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm mb-3 focus:ring-1 focus:ring-zinc-900 outline-none bg-white font-mono placeholder-zinc-400"
             />
-            <button
-              onClick={handleFollowUp}
-              disabled={generating}
-              className="px-4 py-2 bg-amber-600 text-white text-sm font-medium rounded-md hover:bg-amber-700 disabled:opacity-50 transition-colors"
-            >
-              {generating ? 'Generating personalised follow-ups...' : `Generate Follow-ups for ${eligibleRecipients.length} eligible recipients`}
-            </button>
+            {generationProgress ? (
+              <div className="generation-progress-box border border-amber-200 rounded-lg p-5 mt-2 bg-white shadow-sm text-left">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-sm font-medium text-amber-800">
+                    {generationProgress.status === "complete"
+                      ? "✅ Follow-ups Generated"
+                      : generationProgress.status === "error"
+                      ? "❌ Generation Stopped"
+                      : "⚡ Generating Follow-ups..."}
+                  </span>
+                  <span className="text-sm text-gray-500 font-mono">
+                    {generationProgress.completed} / {generationProgress.total}
+                  </span>
+                </div>
+                
+                <div className="w-full bg-amber-100 rounded-full h-2 mb-3 overflow-hidden">
+                  <div
+                    className="bg-amber-500 h-2 rounded-full transition-all duration-500"
+                    style={{
+                      width: generationProgress.total > 0
+                        ? `${Math.round((generationProgress.completed / generationProgress.total) * 100)}%`
+                        : "0%"
+                    }}
+                  />
+                </div>
+                
+                <div className="flex gap-4 text-xs font-mono text-gray-500">
+                  <span>✅ {generationProgress.completed} generated</span>
+                  {generationProgress.failed > 0 && (
+                    <span className="text-red-500">❌ {generationProgress.failed} failed</span>
+                  )}
+                  {generationProgress.status === "generating" && (
+                    <span className="text-amber-600 animate-pulse ml-auto">Running in parallel...</span>
+                  )}
+                </div>
+                
+                {generationProgress.errors && generationProgress.errors.length > 0 && (
+                  <div className="mt-3 text-[10px] font-mono text-red-600 bg-red-50 border border-red-200 rounded p-2 max-h-24 overflow-y-auto text-left">
+                    {generationProgress.errors.map((e, i) => (
+                      <div key={i} className="truncate"><span className="font-semibold">{e.email}:</span> {e.error}</div>
+                    ))}
+                  </div>
+                )}
+                {generationProgress.status === "error" && (
+                  <div className="mt-4 border-t border-amber-100 pt-3">
+                    <button
+                      onClick={() => navigate(`/campaign/${campaignId}/followup/preview`)}
+                      className="px-4 py-1.5 bg-amber-600 text-white rounded text-xs hover:bg-amber-700 font-medium"
+                    >
+                      Continue to Preview
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                onClick={handleFollowUp}
+                className="px-6 py-2 bg-amber-600 text-white text-sm font-medium rounded-none hover:bg-amber-700 transition-colors uppercase tracking-wide"
+              >
+                {`Generate Follow-ups for ${eligibleRecipients.length} eligible recipients`}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -227,22 +298,22 @@ export default function CampaignDetail() {
       )}
 
       {/* Recipients Table */}
-      <h2 className="text-lg font-semibold text-gray-900 mb-3">
+      <h2 className="text-xs font-display font-semibold text-zinc-500 mb-3 uppercase tracking-wider">
         Recipients ({recipients.length})
       </h2>
 
-      <div className="bg-white border border-gray-200 rounded-lg shadow-sm">
+      <div className="bg-white border border-zinc-200 rounded-none">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 border-b border-gray-200">
-                <th className="text-left px-4 py-3 font-medium text-gray-600">Company / Email</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-600">Reply Status</th>
-                <th className="text-center px-4 py-3 font-medium text-gray-600">Sending</th>
-                <th className="text-right px-4 py-3 font-medium text-gray-600"></th>
+              <tr className="bg-zinc-50 border-b border-zinc-200">
+                <th className="text-left px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Company / Email</th>
+                <th className="text-center px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Reply Status</th>
+                <th className="text-center px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sending</th>
+                <th className="text-right px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider"></th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody className="divide-y divide-zinc-200">
               {recipients.map((r) => (
                 <RecipientRow
                   key={r.id}
