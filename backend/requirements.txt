@@ -6,3 +6,4 @@ duckduckgo-search
 apscheduler
 google-genai
 gunicorn
+cerebras-cloud-sdk

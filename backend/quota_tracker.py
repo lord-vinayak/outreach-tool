@@ -12,6 +12,7 @@ QUOTA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quotas.js
 
 DAILY_LIMITS = {
     "gemini":      500,   # gemini-3.1-flash-lite free tier (15 RPM, 500 RPD)
+    "cerebras":   1000,   # Cerebras free tier (1M tokens/day, 30 RPM — ~700 emails at ~1400 tokens/call)
     "groq_1":     250,    # Conservative per-key estimate (token limit ~500K/day @ ~2K tokens/email)
     "groq_2":     250,
     "groq_3":     250,
@@ -98,10 +99,11 @@ def get_best_generation_provider(config: dict):
     Returns None if all exhausted.
     """
     candidates = [
-        ("gemini", config.get("gemini_api_key", "").strip()),
-        ("groq_1", config.get("groq_api_key",   "").strip()),
-        ("groq_2", config.get("groq_api_key_2", "").strip()),
-        ("groq_3", config.get("groq_api_key_3", "").strip()),
+        ("gemini",   config.get("gemini_api_key",   "").strip()),
+        ("cerebras", config.get("cerebras_api_key", "").strip()),
+        ("groq_1",   config.get("groq_api_key",     "").strip()),
+        ("groq_2",   config.get("groq_api_key_2",   "").strip()),
+        ("groq_3",   config.get("groq_api_key_3",   "").strip()),
     ]
     for provider, key in candidates:
         if key and can_use(provider):

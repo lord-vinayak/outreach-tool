@@ -41,8 +41,9 @@ logging.basicConfig(
 log = logging.getLogger("batch_worker")
 
 RESUME_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "resume.pdf")
-GENERATE_BATCH = 15   # Generate this many per loop before switching to send
-GEMINI_RPM_SLEEP = 4  # Seconds between Gemini calls to respect 15 RPM limit
+GENERATE_BATCH = 15      # Generate this many per loop before switching to send
+GEMINI_RPM_SLEEP   = 4  # Seconds between Gemini calls to respect 15 RPM limit
+CEREBRAS_RPM_SLEEP = 2  # Seconds between Cerebras calls to respect 30 RPM limit
 
 
 # ── Status file ────────────────────────────────────────────────────────────────
@@ -169,9 +170,11 @@ def generate_batch(config: dict) -> int:
             success += 1
             log.info(f"  Generated [{provider}]: {r['email']}")
 
-            # Respect Gemini's 15 RPM hard limit
+            # Respect provider RPM limits
             if provider == "gemini":
                 time.sleep(GEMINI_RPM_SLEEP)
+            elif provider == "cerebras":
+                time.sleep(CEREBRAS_RPM_SLEEP)
 
         except Exception as e:
             log.error(f"  Generation failed for {r['email']}: {e}")

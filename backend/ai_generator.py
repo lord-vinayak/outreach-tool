@@ -410,6 +410,57 @@ def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: in
     raise Exception(f"Gemini RPM limit persists after {retries} retries: {last_error}")
 
 
+def _call_cerebras(system_prompt: str, user_prompt: str, api_key: str, retries: int = 4) -> dict:
+    """Call Cerebras API (OpenAI-compatible) using llama-3.3-70b."""
+    import logging
+    _log = logging.getLogger("batch_worker")
+    from cerebras.cloud.sdk import Cerebras
+
+    client = Cerebras(api_key=api_key)
+    model = "llama-3.3-70b"
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": user_prompt + seed_note},
+                ],
+                temperature=0.9,
+                response_format={"type": "json_object"},
+                max_completion_tokens=1024,
+            )
+            text = response.choices[0].message.content.strip()
+            result = json.loads(text)
+            if "subject" not in result or "body" not in result:
+                raise ValueError("Response missing 'subject' or 'body' keys")
+            return result
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            if attempt < retries - 1:
+                continue
+            raise Exception(f"Cerebras JSON parse failed after {retries} attempts: {e}")
+        except Exception as e:
+            err_str = str(e).lower()
+            is_daily = any(x in err_str for x in ["daily", "tokens per day", "token_per_day"])
+            is_rate  = any(x in err_str for x in ["rate limit", "429", "too many requests", "tokens per minute"])
+            if is_daily:
+                _log.warning(f"Cerebras daily token limit hit — falling back: {e}")
+                raise Exception(f"Cerebras daily limit: {e}")
+            elif is_rate:
+                wait = 30 * (attempt + 1)
+                _log.warning(f"Cerebras rate limit — retrying in {wait}s (attempt {attempt+1}/{retries}): {e}")
+                time.sleep(wait)
+                last_error = e
+            else:
+                raise Exception(f"Cerebras API error: {e}")
+
+    raise Exception(f"Cerebras rate limit persists after {retries} retries: {last_error}")
+
+
 def generate_email_auto(profile, recipient, campaign_goal, additional_context,
                         api_key, provider, resume_parsed=None):
     """
@@ -475,6 +526,8 @@ Return ONLY valid JSON: {{"subject": "...", "body": "..."}}"""
 
     if provider == "gemini":
         return _call_gemini(SYSTEM_PROMPT, user_prompt, api_key)
+    elif provider == "cerebras":
+        return _call_cerebras(SYSTEM_PROMPT, user_prompt, api_key)
     else:
         return _call_groq(SYSTEM_PROMPT, user_prompt, api_key)
 

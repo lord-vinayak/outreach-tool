@@ -245,6 +245,7 @@ def get_settings():
         "groq_api_key_2": config.get("groq_api_key_2", ""),
         "groq_api_key_3": config.get("groq_api_key_3", ""),
         "has_gemini_key": bool(config.get("gemini_api_key", "")),
+        "has_cerebras_key": bool(config.get("cerebras_api_key", "")),
         "send_delay_seconds": config.get("send_delay_seconds", 60),
         "is_complete": is_settings_complete(config),
     })

@@ -9,11 +9,13 @@ export default function Settings() {
     groq_api_key_2: '',
     groq_api_key_3: '',
     gemini_api_key: '',
+    cerebras_api_key: '',
     send_delay_seconds: 60,
   })
   const [hasPassword, setHasPassword] = useState(false)
   const [hasKey, setHasKey] = useState(false)
   const [hasGeminiKey, setHasGeminiKey] = useState(false)
+  const [hasCerebrasKey, setHasCerebrasKey] = useState(false)
   const [flash, setFlash] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -32,6 +34,7 @@ export default function Settings() {
         setHasPassword(res.data.has_gmail_password)
         setHasKey(res.data.has_groq_key)
         setHasGeminiKey(res.data.has_gemini_key)
+        setHasCerebrasKey(res.data.has_cerebras_key)
       })
       .catch(console.error)
 
@@ -60,6 +63,7 @@ export default function Settings() {
       if (form.gmail_app_password) setHasPassword(true)
       if (form.groq_api_key) setHasKey(true)
       if (form.gemini_api_key) setHasGeminiKey(true)
+      if (form.cerebras_api_key) setHasCerebrasKey(true)
       setTimeout(() => setFlash(''), 3000)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save settings')
@@ -218,6 +222,34 @@ export default function Settings() {
           </p>
         </div>
 
+        {/* Cerebras API Key */}
+        <div className="pt-4 border-t border-zinc-200">
+          <label className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            <span>Cerebras API Key</span>
+            <span className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-400 font-normal lowercase tracking-normal">for Auto Worker (~1000 req/day free)</span>
+              {hasCerebrasKey && (
+                <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 inline-block">✓ CONFIGURED</span>
+              )}
+            </span>
+          </label>
+          <input
+            type="password"
+            name="cerebras_api_key"
+            value={form.cerebras_api_key}
+            onChange={handleChange}
+            placeholder={hasCerebrasKey ? '••••••••••••••••' : 'csk-... (get free key at cloud.cerebras.ai)'}
+            className="w-full border border-zinc-300 bg-zinc-50 rounded-none px-4 py-3 font-mono text-sm focus:bg-white focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none transition-colors"
+          />
+          <p className="mt-2 text-[11px] font-mono text-zinc-500">
+            Get a free key at{' '}
+            <a href="https://cloud.cerebras.ai" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 underline underline-offset-4">
+              cloud.cerebras.ai
+            </a>
+            {' '}— no credit card required. Uses llama-3.3-70b.
+          </p>
+        </div>
+
         {/* Quota Status */}
         {quotas && (
           <div className="pt-4 border-t border-zinc-200">
@@ -229,7 +261,7 @@ export default function Settings() {
               {Object.entries(quotas.used).map(([key, used]) => {
                 const limit = quotas.limits[key]
                 const pct = Math.round((used / limit) * 100)
-                const label = key === 'gmail_sent' ? 'Gmail Sent' : key === 'gemini' ? 'Gemini' : `Groq Key ${key.split('_')[1]}`
+                const label = key === 'gmail_sent' ? 'Gmail Sent' : key === 'gemini' ? 'Gemini' : key === 'cerebras' ? 'Cerebras' : `Groq Key ${key.split('_')[1]}`
                 return (
                   <div key={key} className="bg-zinc-50 border border-zinc-200 p-3">
                     <div className="flex justify-between text-[10px] font-mono mb-1">
