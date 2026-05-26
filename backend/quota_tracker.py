@@ -79,6 +79,18 @@ def increment(provider: str):
         _save(data)
 
 
+def mark_exhausted(provider: str):
+    """
+    Mark a provider as fully exhausted for today.
+    Called when the actual API returns a rate-limit/quota error,
+    so the tracker doesn't keep retrying the same exhausted provider.
+    """
+    with _lock:
+        data = _load()
+        data[provider] = DAILY_LIMITS.get(provider, 9999)
+        _save(data)
+
+
 def get_best_generation_provider(config: dict):
     """
     Returns (provider_key, api_key) for the first provider with remaining quota.
