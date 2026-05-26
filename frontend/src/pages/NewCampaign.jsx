@@ -5,6 +5,8 @@ import DuplicateWarning from '../components/DuplicateWarning'
 
 export default function NewCampaign() {
   const navigate = useNavigate()
+  const csvInputRef = useRef(null)
+  const [autoMode, setAutoMode] = useState(false)
   const [form, setForm] = useState({
     name: '',
     email_list: '',
@@ -33,6 +35,37 @@ export default function NewCampaign() {
 
   const handleChange = (e) => {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }))
+  }
+
+  const handleCsvUpload = (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (ev) => {
+      const text = ev.target.result
+      // Extract emails from CSV: supports "email,name" or just "email" per line
+      const lines = text.split(/\r?\n/).filter(Boolean)
+      const emails = []
+      lines.forEach((line) => {
+        // Skip header rows
+        if (line.toLowerCase().startsWith('email')) return
+        const parts = line.split(',')
+        const email = parts[0]?.trim()
+        const name  = parts[1]?.trim()
+        if (email && email.includes('@')) {
+          emails.push(name ? `${name} <${email}>` : email)
+        }
+      })
+      const combined = form.email_list
+        ? form.email_list + '\n' + emails.join('\n')
+        : emails.join('\n')
+      setForm((prev) => ({ ...prev, email_list: combined }))
+      checkDuplicates(combined)
+      // Auto-enable auto mode when CSV has many emails
+      if (emails.length > 200) setAutoMode(true)
+    }
+    reader.readAsText(file)
+    e.target.value = ''
   }
 
   const extractEmails = (text) => {
@@ -135,34 +168,38 @@ export default function NewCampaign() {
     setLoading(true)
 
     try {
-      // Step 1: Create campaign
-      const createRes = await api.post('/campaign/new', form)
+      const createRes = await api.post('/campaign/new', { ...form, auto_mode: autoMode })
       const { campaign_id, recipients_count } = createRes.data
       setParsedCount(recipients_count)
       setCampaignId(campaign_id)
 
-      // Step 2: Generate emails
+      if (autoMode) {
+        // Hand off to the background worker — just navigate to campaign detail
+        navigate(`/campaign/${campaign_id}`)
+        return
+      }
+
+      // Manual mode: generate now and go to preview
       setGenerationProgress({ total: recipients_count, completed: 0, failed: 0, status: "generating", errors: [] })
       const genRes = await api.post(`/campaign/${campaign_id}/generate`)
       setGenerationProgress(prev => ({ ...prev, total: genRes.data.total }))
 
       const interval = setInterval(async () => {
-        const progressRes = await api.get(`/campaign/${campaign_id}/generate-progress`);
-        const data = progressRes.data;
-        setGenerationProgress(data);
-
+        const progressRes = await api.get(`/campaign/${campaign_id}/generate-progress`)
+        const data = progressRes.data
+        setGenerationProgress(data)
         if (data.status === "complete" || data.status === "error") {
-          clearInterval(interval);
+          clearInterval(interval)
           if (data.status === "complete") {
             navigate(`/campaign/${campaign_id}/preview`)
           }
         }
-      }, 1500);
+      }, 1500)
 
     } catch (err) {
-      setGenerationProgress(null);
-      setError(err.response?.data?.error || 'Failed to start generation');
-      setLoading(false);
+      setGenerationProgress(null)
+      setError(err.response?.data?.error || 'Failed to create campaign')
+      setLoading(false)
     }
   }
 
@@ -267,7 +304,17 @@ export default function NewCampaign() {
         <div>
           <label htmlFor="email-list" className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
             <span>Email List *</span>
-            <span className="text-zinc-500 font-mono normal-case tracking-normal text-[10px] bg-zinc-100 px-2 py-0.5 border border-zinc-200">paste any format</span>
+            <div className="flex items-center gap-2">
+              <span className="text-zinc-500 font-mono normal-case tracking-normal text-[10px] bg-zinc-100 px-2 py-0.5 border border-zinc-200">paste any format</span>
+              <button
+                type="button"
+                onClick={() => csvInputRef.current?.click()}
+                className="text-[10px] font-mono font-medium text-indigo-700 hover:bg-indigo-50 px-2 py-0.5 border border-indigo-200 uppercase tracking-wider transition-colors"
+              >
+                + Upload CSV
+              </button>
+              <input ref={csvInputRef} type="file" accept=".csv" className="hidden" onChange={handleCsvUpload} />
+            </div>
           </label>
           <textarea
             id="email-list"
@@ -352,14 +399,48 @@ export default function NewCampaign() {
           />
         </div>
 
+        {/* Auto Worker Mode Toggle */}
         <div className="pt-4 border-t border-zinc-200">
+          <label className="flex items-start gap-3 cursor-pointer group">
+            <div className="mt-0.5">
+              <input
+                type="checkbox"
+                checked={autoMode}
+                onChange={(e) => setAutoMode(e.target.checked)}
+                className="w-4 h-4 accent-indigo-700 cursor-pointer"
+              />
+            </div>
+            <div>
+              <div className="text-xs font-display font-bold text-zinc-950 uppercase tracking-widest">
+                Auto Worker Mode
+              </div>
+              <p className="text-[11px] font-mono text-zinc-500 mt-0.5 leading-relaxed">
+                For large batches (200+ emails). The background worker on EC2 will generate and send
+                emails automatically over 3–4 days using Gemini + Groq quotas. No manual steps needed.
+              </p>
+            </div>
+          </label>
+
+          {autoMode && (
+            <div className="mt-3 p-3 bg-amber-50 border border-amber-200 text-[11px] font-mono text-amber-800">
+              ⚡ Auto mode: campaign will be created and handed off to the EC2 worker.
+              Emails generate &amp; send automatically. Monitor progress on the Campaign detail page.
+            </div>
+          )}
+        </div>
+
+        <div>
           <button
             id="create-campaign-btn"
             type="submit"
             disabled={loading || generationProgress?.status === "generating"}
             className="w-full py-3.5 bg-indigo-700 text-white font-display font-bold uppercase tracking-widest text-sm rounded-none hover:bg-indigo-800 disabled:opacity-50 disabled:bg-zinc-400 transition-colors"
           >
-            {generationProgress?.status === "generating" ? 'Generating...' : 'Create Campaign & Generate'}
+            {generationProgress?.status === "generating"
+              ? 'Generating...'
+              : autoMode
+              ? 'Create Campaign (Auto Worker)'
+              : 'Create Campaign & Generate'}
           </button>
         </div>
       </form>

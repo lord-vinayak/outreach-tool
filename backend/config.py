@@ -14,6 +14,7 @@ DEFAULT_CONFIG = {
     "groq_api_key": "",
     "groq_api_key_2": "",
     "groq_api_key_3": "",
+    "gemini_api_key": "",
     "send_delay_seconds": 60,
     "profile": {
         "name": "",

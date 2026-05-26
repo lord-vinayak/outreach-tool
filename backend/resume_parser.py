@@ -58,8 +58,20 @@ Rules:
         response_format={"type": "json_object"}
     )
 
-    raw = response.choices[0].message.content
-    parsed = json.loads(raw)
+    raw = response.choices[0].message.content.strip()
+    # Strip markdown block if present
+    if raw.startswith("```"):
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start != -1 and end != -1:
+            raw = raw[start:end+1]
+    
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"JSON decode error: {e}. Raw content: {raw}")
+        parsed = {}
+        
     return parsed
 
 

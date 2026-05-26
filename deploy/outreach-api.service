@@ -1,0 +1,21 @@
+[Unit]
+Description=Outreach Tool — Flask API (gunicorn)
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/outreach-tool/backend
+ExecStart=/home/ubuntu/outreach-tool/backend/venv/bin/gunicorn \
+    --workers 2 \
+    --bind 127.0.0.1:5000 \
+    --timeout 120 \
+    --access-logfile /home/ubuntu/outreach-tool/backend/access.log \
+    --error-logfile  /home/ubuntu/outreach-tool/backend/error.log \
+    "app:app"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

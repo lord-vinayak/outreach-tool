@@ -34,6 +34,15 @@ def migrate_reply_status_columns(conn):
     conn.commit()
 
 
+def migrate_auto_mode_column(conn):
+    """Add auto_mode column to campaigns if it doesn't exist."""
+    cursor = conn.cursor()
+    existing = [row[1] for row in cursor.execute("PRAGMA table_info(campaigns)").fetchall()]
+    if "auto_mode" not in existing:
+        cursor.execute("ALTER TABLE campaigns ADD COLUMN auto_mode INTEGER DEFAULT 0")
+    conn.commit()
+
+
 def migrate_blocked_domains_table(conn):
     """Safe migration: create blocked_domains table if it doesn't exist."""
     conn.execute("""
@@ -93,12 +102,12 @@ def init_db():
     conn.commit()
     
     migrate_reply_status_columns(conn)
-    
-    # Create index for reply_status after ensuring the column exists
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_recipients_reply_status ON recipients(reply_status);")
     conn.commit()
-    
+
     migrate_blocked_domains_table(conn)
+    migrate_auto_mode_column(conn)
     conn.close()
 
 

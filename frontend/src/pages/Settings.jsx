@@ -8,13 +8,16 @@ export default function Settings() {
     groq_api_key: '',
     groq_api_key_2: '',
     groq_api_key_3: '',
+    gemini_api_key: '',
     send_delay_seconds: 60,
   })
   const [hasPassword, setHasPassword] = useState(false)
   const [hasKey, setHasKey] = useState(false)
+  const [hasGeminiKey, setHasGeminiKey] = useState(false)
   const [flash, setFlash] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [quotas, setQuotas] = useState(null)
 
   useEffect(() => {
     api.get('/settings')
@@ -28,8 +31,13 @@ export default function Settings() {
         }))
         setHasPassword(res.data.has_gmail_password)
         setHasKey(res.data.has_groq_key)
+        setHasGeminiKey(res.data.has_gemini_key)
       })
       .catch(console.error)
+
+    api.get('/quotas')
+      .then((res) => setQuotas(res.data))
+      .catch(() => {})
   }, [])
 
   const handleChange = (e) => {
@@ -51,6 +59,7 @@ export default function Settings() {
       setFlash('Settings saved successfully!')
       if (form.gmail_app_password) setHasPassword(true)
       if (form.groq_api_key) setHasKey(true)
+      if (form.gemini_api_key) setHasGeminiKey(true)
       setTimeout(() => setFlash(''), 3000)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save settings')
@@ -175,11 +184,70 @@ export default function Settings() {
         </div>
 
         <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-1">
-          💡 Adding multiple Groq keys enables round-robin rotation — 
-          this multiplies your effective rate limit. 
+          💡 Adding multiple Groq keys enables round-robin rotation —
+          this multiplies your effective rate limit.
           Get free keys at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="underline">console.groq.com</a>.
           Only Key 1 is required.
         </div>
+
+        {/* Gemini API Key */}
+        <div className="pt-4 border-t border-zinc-200">
+          <label className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            <span>Google Gemini API Key</span>
+            <span className="flex items-center gap-2">
+              <span className="text-[10px] text-zinc-400 font-normal lowercase tracking-normal">for Auto Worker (1500 req/day free)</span>
+              {hasGeminiKey && (
+                <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 inline-block">✓ CONFIGURED</span>
+              )}
+            </span>
+          </label>
+          <input
+            type="password"
+            name="gemini_api_key"
+            value={form.gemini_api_key}
+            onChange={handleChange}
+            placeholder={hasGeminiKey ? '••••••••••••••••' : 'AIza... (get free key at aistudio.google.com)'}
+            className="w-full border border-zinc-300 bg-zinc-50 rounded-none px-4 py-3 font-mono text-sm focus:bg-white focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none transition-colors"
+          />
+          <p className="mt-2 text-[11px] font-mono text-zinc-500">
+            Get a free key at{' '}
+            <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-indigo-600 hover:text-indigo-800 underline underline-offset-4">
+              aistudio.google.com/apikey
+            </a>
+            {' '}— no credit card required.
+          </p>
+        </div>
+
+        {/* Quota Status */}
+        {quotas && (
+          <div className="pt-4 border-t border-zinc-200">
+            <div className="text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-3">
+              Today's Quota Usage
+              <span className="ml-2 text-[10px] font-mono font-normal text-zinc-400 lowercase tracking-normal">resets midnight UTC</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {Object.entries(quotas.used).map(([key, used]) => {
+                const limit = quotas.limits[key]
+                const pct = Math.round((used / limit) * 100)
+                const label = key === 'gmail_sent' ? 'Gmail Sent' : key === 'gemini' ? 'Gemini' : `Groq Key ${key.split('_')[1]}`
+                return (
+                  <div key={key} className="bg-zinc-50 border border-zinc-200 p-3">
+                    <div className="flex justify-between text-[10px] font-mono mb-1">
+                      <span className="text-zinc-600">{label}</span>
+                      <span className="text-zinc-900 font-bold">{used}/{limit}</span>
+                    </div>
+                    <div className="w-full bg-zinc-200 h-1.5">
+                      <div
+                        className={`h-1.5 transition-all ${pct > 90 ? 'bg-red-500' : pct > 60 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Send Delay */}
         <div className="pb-6 border-b border-zinc-200">

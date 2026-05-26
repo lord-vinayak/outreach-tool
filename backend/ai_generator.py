@@ -351,6 +351,117 @@ TONE & INTENT:
 TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 
+def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: int = 3) -> dict:
+    """Call Google Gemini Flash and return parsed JSON with subject + body."""
+    import google.generativeai as genai
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(
+        model_name="gemini-1.5-flash",
+        system_instruction=system_prompt,
+        generation_config=genai.GenerationConfig(
+            temperature=0.9,
+            response_mime_type="application/json",
+        ),
+    )
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
+            response = model.generate_content(user_prompt + seed_note)
+            text = response.text.strip()
+            result = json.loads(text)
+            if "subject" not in result or "body" not in result:
+                raise ValueError("Response missing 'subject' or 'body' keys")
+            return result
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            if attempt < retries - 1:
+                continue
+            raise Exception(f"Gemini JSON parse failed after {retries} attempts: {e}")
+        except Exception as e:
+            err_str = str(e).lower()
+            if any(x in err_str for x in ["429", "quota", "rate", "resource_exhausted"]):
+                wait = 60 * (attempt + 1)
+                print(f"Gemini rate limit hit — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+                last_error = e
+            else:
+                raise Exception(f"Gemini API error: {e}")
+
+    raise Exception(f"Gemini failed after {retries} retries: {last_error}")
+
+
+def generate_email_auto(profile, recipient, campaign_goal, additional_context,
+                        api_key, provider, resume_parsed=None):
+    """
+    Generate a cold outreach email using a specified provider.
+    provider: "gemini" | "groq_1" | "groq_2" | "groq_3"
+    Uses the same prompt logic as generate_email().
+    For Gemini, company name falls back to domain parsing (avoids extra Groq calls).
+    """
+    domain = recipient["email"].split("@")[1]
+
+    if provider.startswith("groq"):
+        company = resolve_company_name(domain, api_key)
+    else:
+        company = domain.split(".")[0].replace("-", " ").replace("_", " ").title()
+
+    recipient_name = recipient.get("name") or "address them naturally without an explicit name if unknown"
+    resume_block = build_resume_highlights(resume_parsed) if resume_parsed else "Not available."
+
+    user_prompt = f"""Generate a cold outreach email from the following student to the recipient at {company}.
+
+STUDENT PROFILE:
+- Name: {profile.get('name', '')}
+- College: {profile.get('college', '')}, {profile.get('branch', '')}, {profile.get('year', '')}
+- CGPA: {profile.get('cgpa', 'Not specified')}
+- Skills: {profile.get('skills', '')}
+- Bio: {profile.get('bio', '')}
+- GitHub: {profile.get('github', 'Not provided')}
+- LinkedIn: {profile.get('linkedin', 'Not provided')}
+
+RESUME HIGHLIGHTS (use to personalise the email — pick 1–2 specific things to naturally mention):
+{resume_block}
+
+RECIPIENT:
+- Email: {recipient['email']}
+- Name: {recipient_name}
+- Company: {company}
+
+CAMPAIGN GOAL:
+{campaign_goal}
+
+ADDITIONAL CONTEXT:
+{additional_context or 'None'}
+
+RESUME HIGHLIGHT RULES:
+- Mention exactly ONE project or experience from RESUME HIGHLIGHTS — pick the most relevant to this company's domain
+- Keep it to one natural sentence
+- Do NOT mention multiple projects
+- Do NOT copy the project description verbatim
+
+EMAIL STRUCTURE RULES:
+- Line 1 must be the greeting: "Hi [Name]," or "Hi there,"
+- Vary the opening sentence — do not start with the same phrase as other emails
+- Vary the closing ask — do not use identical wording across emails
+- Give proper spacing of 1 blank line between paragraphs
+
+SIGN-OFF:
+End the email body with exactly this format:
+
+Best,
+{profile.get('name', '').split()[0] if profile.get('name') else 'Student'}
+
+Return ONLY valid JSON: {{"subject": "...", "body": "..."}}"""
+
+    if provider == "gemini":
+        return _call_gemini(SYSTEM_PROMPT, user_prompt, api_key)
+    else:
+        return _call_groq(SYSTEM_PROMPT, user_prompt, api_key)
+
+
 def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama/llama-4-scout-17b-16e-instruct"):
     """
     Call the Groq API and parse the JSON response.

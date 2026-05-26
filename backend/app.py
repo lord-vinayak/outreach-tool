@@ -3,6 +3,7 @@ Flask application with all API routes for the outreach tool.
 """
 
 import os
+import json
 import threading
 import time
 from datetime import datetime
@@ -169,15 +170,24 @@ def upload_resume():
     config = load_config()
     config["resume_path"] = filepath
     
-    # Trigger parsing automatically if Groq key exists
-    groq_api_key = config.get("groq_api_key", "")
-    if groq_api_key:
+    # Trigger parsing automatically by trying all available Groq keys
+    keys_to_try = []
+    for field in ["groq_api_key", "groq_api_key_2", "groq_api_key_3"]:
+        val = config.get(field, "").strip()
+        if val:
+            keys_to_try.append(val)
+            
+    parsed = None
+    for key in keys_to_try:
         try:
-            parsed = parse_resume(filepath, groq_api_key)
-            config["resume_parsed"] = parsed
+            parsed = parse_resume(filepath, key)
+            if parsed:
+                break
         except Exception as e:
-            print(f"Resume parsing failed: {e}")
-            config["resume_parsed"] = {}
+            print(f"Resume parsing failed with key: {e}")
+            
+    if parsed:
+        config["resume_parsed"] = parsed
     else:
         config["resume_parsed"] = {}
 
@@ -189,22 +199,37 @@ def upload_resume():
 @app.route("/api/resume/reparse", methods=["POST"])
 def reparse_resume():
     config = load_config()
-    groq_api_key = config.get("groq_api_key", "")
+    
+    keys_to_try = []
+    for field in ["groq_api_key", "groq_api_key_2", "groq_api_key_3"]:
+        val = config.get(field, "").strip()
+        if val:
+            keys_to_try.append(val)
+            
     resume_path = config.get("resume_path", os.path.join(UPLOAD_FOLDER, "resume.pdf"))
     
-    if not groq_api_key:
+    if not keys_to_try:
         return jsonify({"error": "Groq API key not configured. Go to Settings."}), 400
     
     if not os.path.exists(resume_path):
         return jsonify({"error": "No resume uploaded yet"}), 400
     
-    try:
-        parsed = parse_resume(resume_path, groq_api_key)
+    last_error = None
+    parsed = None
+    for key in keys_to_try:
+        try:
+            parsed = parse_resume(resume_path, key)
+            if parsed:
+                break
+        except Exception as e:
+            last_error = e
+            
+    if parsed:
         config["resume_parsed"] = parsed
         save_config(config)
         return jsonify({"success": True, "parsed": parsed})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    else:
+        return jsonify({"error": str(last_error)}), 500
 
 
 # ─── Settings Routes ─────────────────────────────────────────────────────────
@@ -219,6 +244,7 @@ def get_settings():
         "has_groq_key": bool(config.get("groq_api_key", "")),
         "groq_api_key_2": config.get("groq_api_key_2", ""),
         "groq_api_key_3": config.get("groq_api_key_3", ""),
+        "has_gemini_key": bool(config.get("gemini_api_key", "")),
         "send_delay_seconds": config.get("send_delay_seconds", 60),
         "is_complete": is_settings_complete(config),
     })
@@ -242,12 +268,35 @@ def save_settings():
         config["groq_api_key_2"] = data["groq_api_key_2"]
     if "groq_api_key_3" in data:
         config["groq_api_key_3"] = data["groq_api_key_3"]
+    if "gemini_api_key" in data:
+        config["gemini_api_key"] = data["gemini_api_key"]
     if "send_delay_seconds" in data:
         delay = int(data["send_delay_seconds"])
         config["send_delay_seconds"] = max(20, min(90, delay))
 
     save_config(config)
     return jsonify({"message": "Settings saved successfully"})
+
+
+# ─── Quota & Worker Status Routes ────────────────────────────────────────────
+
+import quota_tracker as _qt
+
+@app.route("/api/quotas", methods=["GET"])
+def get_quotas():
+    return jsonify(_qt.get_quotas())
+
+
+@app.route("/api/worker/status", methods=["GET"])
+def get_worker_status():
+    status_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_status.json")
+    if not os.path.exists(status_path):
+        return jsonify({"running": False, "last_action": "Worker has never started."})
+    try:
+        with open(status_path) as f:
+            return jsonify(json.load(f))
+    except Exception:
+        return jsonify({"running": False, "last_action": "Could not read worker status."})
 
 
 # ─── Campaign Routes ─────────────────────────────────────────────────────────
@@ -309,6 +358,7 @@ def create_campaign():
     goal = data.get("goal", "").strip()
     email_list_raw = data.get("email_list", "").strip()
     additional_context = data.get("additional_context", "").strip()
+    auto_mode = 1 if data.get("auto_mode") else 0
 
     if not name:
         return jsonify({"error": "Campaign name is required"}), 400
@@ -329,8 +379,8 @@ def create_campaign():
 
     # Create campaign
     campaign_id = execute_db(
-        "INSERT INTO campaigns (name, goal, additional_context) VALUES (?, ?, ?)",
-        (name, goal, additional_context or None),
+        "INSERT INTO campaigns (name, goal, additional_context, auto_mode) VALUES (?, ?, ?, ?)",
+        (name, goal, additional_context or None, auto_mode),
     )
 
     # Insert recipients as drafts
@@ -346,6 +396,7 @@ def create_campaign():
     return jsonify({
         "campaign_id": campaign_id,
         "recipients_count": len(parsed),
+        "auto_mode": bool(auto_mode),
         "message": f"Campaign created with {len(parsed)} recipients",
     })
 
@@ -1332,8 +1383,9 @@ def campaign_bounces(campaign_id):
 
 # ─── App Startup ──────────────────────────────────────────────────────────────
 
+# Run init on import so gunicorn workers also initialise the DB
+init_db()
+load_config()
 
 if __name__ == "__main__":
-    init_db()
-    load_config()  # Ensure config.json exists
-    app.run(debug=True, port=5000)
+    app.run(debug=False, port=5000)

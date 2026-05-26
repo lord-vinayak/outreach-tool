@@ -1,0 +1,15 @@
+[Unit]
+Description=Outreach Tool — Autonomous Batch Worker
+After=network.target outreach-api.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/outreach-tool/backend
+ExecStart=/home/ubuntu/outreach-tool/backend/venv/bin/python batch_worker.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
