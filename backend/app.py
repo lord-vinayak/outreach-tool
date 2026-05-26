@@ -271,6 +271,8 @@ def save_settings():
         config["groq_api_key_3"] = data["groq_api_key_3"]
     if "gemini_api_key" in data:
         config["gemini_api_key"] = data["gemini_api_key"]
+    if "cerebras_api_key" in data:
+        config["cerebras_api_key"] = data["cerebras_api_key"]
     if "send_delay_seconds" in data:
         delay = int(data["send_delay_seconds"])
         config["send_delay_seconds"] = max(20, min(90, delay))
