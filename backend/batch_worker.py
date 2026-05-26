@@ -176,8 +176,10 @@ def generate_batch(config: dict) -> int:
         except Exception as e:
             log.error(f"  Generation failed for {r['email']}: {e}")
             err = str(e).lower()
-            if any(x in err for x in ["quota", "resource_exhausted", "daily limit", "rate limit", "429"]):
-                log.warning(f"  [{provider}] rate limit hit — marking exhausted, switching provider.")
+            if any(x in err for x in ["resource_exhausted", "daily limit", "rate limit", "429"]):
+                # Only mark exhausted after _call_gemini/_call_groq has already
+                # retried internally. If we reach here it's a real daily limit.
+                log.warning(f"  [{provider}] daily limit confirmed — marking exhausted, switching provider.")
                 quota_tracker.mark_exhausted(provider)
                 break
             time.sleep(2)
