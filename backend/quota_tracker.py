@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 QUOTA_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "quotas.json")
 
 DAILY_LIMITS = {
-    "gemini":     1500,   # Gemini 1.5 Flash free tier
+    "gemini":      500,   # gemini-3.1-flash-lite free tier (15 RPM, 500 RPD)
     "groq_1":     250,    # Conservative per-key estimate (token limit ~500K/day @ ~2K tokens/email)
     "groq_2":     250,
     "groq_3":     250,

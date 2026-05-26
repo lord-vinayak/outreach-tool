@@ -353,6 +353,9 @@ TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: int = 3) -> dict:
     """Call Google Gemini Flash using the new google-genai SDK."""
+    import logging
+    _log = logging.getLogger("batch_worker")
+
     from google import genai
     from google.genai import types
 
@@ -363,7 +366,7 @@ def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: in
         try:
             seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
             response = client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-3.1-flash-lite",
                 contents=user_prompt + seed_note,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt,
@@ -383,15 +386,28 @@ def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: in
             raise Exception(f"Gemini JSON parse failed after {retries} attempts: {e}")
         except Exception as e:
             err_str = str(e).lower()
-            if any(x in err_str for x in ["resource_exhausted", "quota", "daily limit", "rate limit"]):
-                wait = 60 * (attempt + 1)
-                print(f"Gemini rate limit — retrying in {wait}s (attempt {attempt+1}/{retries})")
+            is_quota_error = any(x in err_str for x in ["resource_exhausted", "quota", "daily limit", "rate limit", "429"])
+            is_rpm_limit = any(x in err_str for x in ["per_minute", "per-minute", "rpm", "requests_per_minute"])
+
+            if is_quota_error:
+                is_zero_quota = "limit: 0" in err_str
+                if is_zero_quota:
+                    # Project has no free-tier quota allocated — get a new key from AI Studio
+                    _log.warning(f"Gemini API key has 0 quota (wrong project type) — falling back to Groq: {e}")
+                    raise Exception(f"Gemini quota not allocated: {e}")
+                if not is_rpm_limit:
+                    # Daily limit exhausted — retrying won't help until midnight
+                    _log.warning(f"Gemini daily limit hit — falling back to Groq: {e}")
+                    raise Exception(f"Gemini daily limit: {e}")
+                # RPM limit — transient, wait for the rate window to clear
+                wait = 60
+                _log.warning(f"Gemini RPM limit — retrying in {wait}s (attempt {attempt+1}/{retries}): {e}")
                 time.sleep(wait)
                 last_error = e
             else:
                 raise Exception(f"Gemini API error: {e}")
 
-    raise Exception(f"Gemini failed after {retries} retries: {last_error}")
+    raise Exception(f"Gemini RPM limit persists after {retries} retries: {last_error}")
 
 
 def generate_email_auto(profile, recipient, campaign_goal, additional_context,
