@@ -357,7 +357,7 @@ def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: in
 
     genai.configure(api_key=api_key)
     model = genai.GenerativeModel(
-        model_name="gemini-1.5-flash",
+        model_name="gemini-2.0-flash",
         system_instruction=system_prompt,
         generation_config=genai.GenerationConfig(
             temperature=0.9,

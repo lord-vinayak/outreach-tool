@@ -176,7 +176,7 @@ def generate_batch(config: dict) -> int:
         except Exception as e:
             log.error(f"  Generation failed for {r['email']}: {e}")
             err = str(e).lower()
-            if any(x in err for x in ["quota", "429", "rate", "resource_exhausted", "daily"]):
+            if any(x in err for x in ["quota", "resource_exhausted", "daily limit", "rate limit"]):
                 log.warning(f"  [{provider}] rate limit hit — stopping batch early.")
                 break
             time.sleep(2)
