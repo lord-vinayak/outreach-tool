@@ -352,24 +352,25 @@ TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 
 def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: int = 3) -> dict:
-    """Call Google Gemini Flash and return parsed JSON with subject + body."""
-    import google.generativeai as genai
+    """Call Google Gemini Flash using the new google-genai SDK."""
+    from google import genai
+    from google.genai import types
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash",
-        system_instruction=system_prompt,
-        generation_config=genai.GenerationConfig(
-            temperature=0.9,
-            response_mime_type="application/json",
-        ),
-    )
+    client = genai.Client(api_key=api_key)
 
     last_error = None
     for attempt in range(retries):
         try:
             seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
-            response = model.generate_content(user_prompt + seed_note)
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=user_prompt + seed_note,
+                config=types.GenerateContentConfig(
+                    system_instruction=system_prompt,
+                    temperature=0.9,
+                    response_mime_type="application/json",
+                ),
+            )
             text = response.text.strip()
             result = json.loads(text)
             if "subject" not in result or "body" not in result:
@@ -382,9 +383,9 @@ def _call_gemini(system_prompt: str, user_prompt: str, api_key: str, retries: in
             raise Exception(f"Gemini JSON parse failed after {retries} attempts: {e}")
         except Exception as e:
             err_str = str(e).lower()
-            if any(x in err_str for x in ["429", "quota", "rate", "resource_exhausted"]):
+            if any(x in err_str for x in ["resource_exhausted", "quota", "daily limit", "rate limit"]):
                 wait = 60 * (attempt + 1)
-                print(f"Gemini rate limit hit — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                print(f"Gemini rate limit — retrying in {wait}s (attempt {attempt+1}/{retries})")
                 time.sleep(wait)
                 last_error = e
             else:

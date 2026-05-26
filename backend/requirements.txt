@@ -4,5 +4,5 @@ groq
 pdfplumber
 duckduckgo-search
 apscheduler
-google-generativeai
+google-genai
 gunicorn
