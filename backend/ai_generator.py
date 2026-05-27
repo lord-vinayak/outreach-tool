@@ -430,10 +430,18 @@ def _call_cerebras(system_prompt: str, user_prompt: str, api_key: str, retries: 
                     {"role": "user",   "content": user_prompt + seed_note},
                 ],
                 temperature=0.9,
-                response_format={"type": "json_object"},
                 max_completion_tokens=1024,
             )
-            text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if content is None:
+                raise ValueError("Cerebras returned null content")
+            text = content.strip()
+            # Strip markdown code fences if present (```json ... ```)
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+                text = text.strip()
             result = json.loads(text)
             if "subject" not in result or "body" not in result:
                 raise ValueError("Response missing 'subject' or 'body' keys")
