@@ -180,9 +180,13 @@ def generate_batch(config: dict) -> int:
             log.error(f"  Generation failed for {r['email']}: {e}")
             err = str(e).lower()
             if any(x in err for x in ["resource_exhausted", "daily limit", "rate limit", "429"]):
-                # Only mark exhausted after _call_gemini/_call_groq has already
-                # retried internally. If we reach here it's a real daily limit.
+                # Only mark exhausted after internal retries have failed — real daily limit.
                 log.warning(f"  [{provider}] daily limit confirmed — marking exhausted, switching provider.")
+                quota_tracker.mark_exhausted(provider)
+                break
+            if any(x in err for x in ["404", "not_found", "does not exist", "no access", "model_not_found"]):
+                # Model unavailable / wrong ID — provider unusable, switch immediately.
+                log.warning(f"  [{provider}] model not found / no access — marking exhausted, switching provider.")
                 quota_tracker.mark_exhausted(provider)
                 break
             time.sleep(2)
@@ -276,6 +280,11 @@ def run():
                                 "quotas_remaining":   quotas["remaining"],
                             },
                         )
+                    elif quota_tracker.get_best_generation_provider(config):
+                        # Provider was marked exhausted mid-batch (e.g. 404/model error).
+                        # Another provider is available — keep looping, don't sleep.
+                        log.info("Provider failed and was marked exhausted — retrying with next provider.")
+                        did_something = True
                 else:
                     log.info("All generation quotas exhausted for today.")
 

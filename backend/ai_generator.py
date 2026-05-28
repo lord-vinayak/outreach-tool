@@ -417,7 +417,7 @@ def _call_cerebras(system_prompt: str, user_prompt: str, api_key: str, retries: 
     from cerebras.cloud.sdk import Cerebras
 
     client = Cerebras(api_key=api_key)
-    model = "qwen-3-235b-a22b-instruct-2507"
+    model = "llama3.1-8b"
 
     last_error = None
     for attempt in range(retries):
