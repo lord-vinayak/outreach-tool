@@ -44,6 +44,9 @@ RESUME_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "upload
 GENERATE_BATCH = 15      # Generate this many per loop before switching to send
 GEMINI_RPM_SLEEP   = 4  # Seconds between Gemini calls to respect 15 RPM limit
 CEREBRAS_RPM_SLEEP = 2  # Seconds between Cerebras calls to respect 30 RPM limit
+RECHECK_INTERVAL   = 1800  # Max seconds to sleep when nothing is actionable (30 min).
+                           # Caps the old "sleep until midnight" so a transient stall
+                           # (or a sleep computed just after midnight) can't kill a day.
 
 
 # ── Status file ────────────────────────────────────────────────────────────────
@@ -78,7 +81,8 @@ def _write_stopped():
 # ── DB helpers ─────────────────────────────────────────────────────────────────
 
 def get_pending_generation(limit: int = GENERATE_BATCH):
-    """Recipients that need AI generation (draft, no subject yet, in auto campaigns)."""
+    """Recipients that need AI generation (draft, no subject yet, in auto campaigns,
+    domain not blocked — no point generating for an address we can never send to)."""
     return query_db("""
         SELECT r.id, r.email, r.name, r.campaign_id,
                c.goal   AS campaign_goal,
@@ -88,6 +92,8 @@ def get_pending_generation(limit: int = GENERATE_BATCH):
         WHERE  r.status    = 'draft'
         AND    r.subject   IS NULL
         AND    c.auto_mode = 1
+        AND    LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1))
+               NOT IN (SELECT domain FROM blocked_domains)
         ORDER  BY r.id ASC
         LIMIT  ?
     """, (limit,))
@@ -110,6 +116,11 @@ def get_next_to_send():
 
 
 def count_pending():
+    # Must mirror the WHERE clauses of get_pending_generation / get_next_to_send,
+    # INCLUDING the blocked-domain exclusion. Otherwise the worker can count work
+    # that the actual fetch queries refuse to return (e.g. all remaining drafts are
+    # on blocked domains) → it thinks there is work, does nothing, and falls into
+    # the "exhausted" 24h sleep even though no quota is actually exhausted.
     row = query_db("""
         SELECT
             SUM(CASE WHEN r.subject IS NULL  THEN 1 ELSE 0 END) AS need_gen,
@@ -117,6 +128,8 @@ def count_pending():
         FROM recipients r
         JOIN campaigns c ON c.id = r.campaign_id
         WHERE r.status = 'draft' AND c.auto_mode = 1
+        AND   LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1))
+              NOT IN (SELECT domain FROM blocked_domains)
     """, one=True)
     return (row["need_gen"] or 0), (row["need_send"] or 0)
 
@@ -299,14 +312,23 @@ def run():
                 else:
                     log.info("Gmail daily limit reached (1900). Waiting for midnight UTC.")
 
-            # ── Sleep if everything is exhausted ───────────────────────────
+            # ── Sleep if nothing was actionable ────────────────────────────
+            # We may be here because (a) all daily quotas are genuinely exhausted,
+            # or (b) a transient/non-quota reason (e.g. the only remaining drafts
+            # are momentarily not sendable). Cap the sleep so case (b) — or a sleep
+            # computed just after midnight that would otherwise be ~24h — can never
+            # park the worker for the whole day. It wakes, re-evaluates, and either
+            # resumes work or sleeps again. Worst case we lose RECHECK_INTERVAL.
             if not did_something:
-                sleep_secs = quota_tracker.seconds_until_midnight_utc()
+                secs_to_midnight = quota_tracker.seconds_until_midnight_utc()
+                sleep_secs = min(secs_to_midnight, RECHECK_INTERVAL)
                 log.info(
-                    f"All quotas exhausted. Sleeping {sleep_secs / 3600:.1f}h until midnight UTC reset."
+                    f"Nothing actionable (quotas exhausted or no sendable work). "
+                    f"Sleeping {sleep_secs / 60:.0f} min then re-checking "
+                    f"(midnight reset in {secs_to_midnight / 3600:.1f}h)."
                 )
                 _write_status(
-                    f"Sleeping until midnight UTC ({sleep_secs / 3600:.1f}h)",
+                    f"Idle/exhausted — re-checking in {sleep_secs / 60:.0f} min",
                     {"sleep_until_utc": (datetime.now(timezone.utc).isoformat())},
                 )
                 time.sleep(sleep_secs)
