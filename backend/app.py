@@ -1108,6 +1108,218 @@ def get_followup_send_progress(campaign_id):
     return jsonify(progress)
 
 
+# ─── Auto Follow-up (generate + send in one server-side job) ──────────────────
+
+# In-memory progress for the combined generate→send follow-up job.
+# Keyed by campaign_id. Survives as long as the gunicorn worker process lives.
+auto_followup_progress = {}
+
+
+def _auto_followup_eligible(campaign_id):
+    """Recipients eligible for an automatic follow-up: original was sent, no
+    follow-up yet, not excluded, not a terminal reply status, domain not blocked."""
+    return query_db("""
+        SELECT * FROM recipients
+        WHERE campaign_id = ?
+          AND status = 'sent'
+          AND follow_up_sent = 0
+          AND exclude_followup = 0
+          AND reply_status NOT IN
+              ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
+          AND LOWER(SUBSTR(email, INSTR(email, '@') + 1)) NOT IN
+              (SELECT domain FROM blocked_domains)
+        ORDER BY id
+    """, (campaign_id,))
+
+
+@app.route("/api/campaign/<int:campaign_id>/followup/auto", methods=["POST"])
+def auto_followup(campaign_id):
+    """Generate follow-ups for every eligible recipient AND send them, all in a
+    single server-side background thread (fire-and-forget — the browser can close).
+    """
+    config = load_config()
+
+    if not is_settings_complete(config):
+        return jsonify({"error": "Credentials not configured. Go to Settings."}), 400
+
+    try:
+        get_groq_key_cycle(config)  # validates at least one Groq key exists
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    resume_path = os.path.join(UPLOAD_FOLDER, "resume.pdf")
+    if not os.path.exists(resume_path):
+        return jsonify({"error": "Resume PDF not found"}), 400
+
+    # Don't start a second job for the same campaign while one is active.
+    existing = auto_followup_progress.get(campaign_id)
+    if existing and existing.get("status") in ("generating", "sending"):
+        return jsonify({"error": "An auto follow-up job is already running for this campaign."}), 409
+
+    data = request.json or {}
+    global_context = data.get("global_context", "")
+
+    recipients = _auto_followup_eligible(campaign_id)
+    if not recipients:
+        return jsonify({"error": "No recipients eligible for follow-up"}), 400
+
+    auto_followup_progress[campaign_id] = {
+        "status":        "generating",   # generating → sending → complete | error
+        "gen_total":     len(recipients),
+        "gen_completed": 0,
+        "gen_failed":    0,
+        "send_total":    0,
+        "send_current":  0,
+        "sent":          0,
+        "send_failed":   0,
+        "current_email": "",
+        "errors":        [],
+    }
+
+    thread = threading.Thread(
+        target=_auto_followup_thread,
+        args=(campaign_id, recipients, config, resume_path, global_context),
+        daemon=True,
+    )
+    thread.start()
+
+    return jsonify({
+        "message": "Auto follow-up started (generating, then sending).",
+        "total": len(recipients),
+    })
+
+
+def _auto_followup_thread(campaign_id, recipients, config, resume_path, global_context):
+    """Phase 1: generate a draft follow-up per recipient (parallel, Groq).
+       Phase 2: send each draft as a threaded reply, sequentially with delay."""
+    progress = auto_followup_progress[campaign_id]
+    profile = config.get("profile", {})
+    resume_parsed = config.get("resume_parsed", {})
+    key_cycle = get_groq_key_cycle(config)
+
+    # ── Phase 1: generate ──────────────────────────────────────────────────
+    def generate_one(r):
+        api_key = get_next_groq_key(key_cycle)
+        try:
+            result = generate_contextual_followup(
+                profile=profile,
+                original_subject=r["subject"],
+                original_body=r["email_body"],
+                recipient_email=r["email"],
+                recipient_name=r["name"],
+                reply_status=r["reply_status"] or "no_reply",
+                reply_content=r["reply_content"],
+                check_back_date=r["check_back_date"],
+                global_context=global_context,
+                api_key=api_key,
+                resume_parsed=resume_parsed,
+            )
+            return r, result, None
+        except Exception as e:
+            return r, None, str(e)
+
+    num_workers = min(len(recipients), 10)
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        futures = {executor.submit(generate_one, r): r for r in recipients}
+        conn = get_db()
+        try:
+            for future in as_completed(futures):
+                r, result, error = future.result()
+                if error:
+                    progress["gen_failed"] += 1
+                    progress["errors"].append({"email": r["email"], "phase": "generate", "error": error})
+                    if "daily rate limit" in error.lower():
+                        progress["status"] = "error"
+                        for f in futures:
+                            f.cancel()
+                        break
+                else:
+                    conn.execute(
+                        "INSERT INTO followups (recipient_id, subject, email_body, status) "
+                        "VALUES (?, ?, ?, 'draft')",
+                        (r["id"], result["subject"], result["body"]),
+                    )
+                    conn.commit()
+                    progress["gen_completed"] += 1
+        finally:
+            conn.close()
+
+    if progress["status"] == "error":
+        return
+
+    # ── Phase 2: send ──────────────────────────────────────────────────────
+    followups = query_db("""
+        SELECT f.*, r.email AS recipient_email, r.name AS recipient_name,
+               r.message_id AS original_message_id, r.id AS rid
+        FROM followups f
+        JOIN recipients r ON r.id = f.recipient_id
+        WHERE r.campaign_id = ? AND f.status = 'draft'
+          AND LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1)) NOT IN
+              (SELECT domain FROM blocked_domains)
+        ORDER BY f.id
+    """, (campaign_id,))
+
+    progress["status"] = "sending"
+    progress["send_total"] = len(followups)
+
+    if not followups:
+        progress["status"] = "complete"
+        progress["current_email"] = ""
+        return
+
+    delay = config.get("send_delay_seconds", 60)
+    for i, f in enumerate(followups):
+        progress["send_current"] = i + 1
+        progress["current_email"] = f["recipient_email"]
+
+        conn = get_db()
+        try:
+            message_id = send_email(
+                sender_email=config["gmail_address"],
+                sender_name=config["profile"]["name"],
+                app_password=config["gmail_app_password"],
+                recipient_email=f["recipient_email"],
+                subject=f["subject"],
+                body=f["email_body"],
+                resume_path=resume_path,
+                reply_to_message_id=f["original_message_id"],
+            )
+            conn.execute(
+                "UPDATE followups SET status = 'sent', sent_at = ? WHERE id = ?",
+                (datetime.utcnow().isoformat(), f["id"]),
+            )
+            conn.execute(
+                "UPDATE recipients SET follow_up_sent = 1 WHERE id = ?",
+                (f["rid"],),
+            )
+            progress["sent"] += 1
+        except Exception as e:
+            conn.execute(
+                "UPDATE followups SET status = 'failed', error_message = ? WHERE id = ?",
+                (str(e), f["id"]),
+            )
+            progress["send_failed"] += 1
+            progress["errors"].append({"email": f["recipient_email"], "phase": "send", "error": str(e)})
+        finally:
+            conn.commit()
+            conn.close()
+
+        if i < len(followups) - 1:
+            time.sleep(delay)
+
+    progress["status"] = "complete"
+    progress["current_email"] = ""
+
+
+@app.route("/api/campaign/<int:campaign_id>/followup/auto-progress", methods=["GET"])
+def get_auto_followup_progress(campaign_id):
+    """Poll endpoint for the combined auto follow-up job."""
+    progress = auto_followup_progress.get(campaign_id)
+    if not progress:
+        return jsonify({"status": "idle"})
+    return jsonify(progress)
+
+
 # ─── Dashboard Route ──────────────────────────────────────────────────────────
 
 

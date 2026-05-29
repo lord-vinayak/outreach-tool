@@ -22,6 +22,8 @@ export default function CampaignDetail() {
   const [error, setError] = useState('')
   const [followupContext, setFollowupContext] = useState('')
   const [generationProgress, setGenerationProgress] = useState(null)
+  const [autoProgress, setAutoProgress] = useState(null)
+  const autoPollRef = useRef(null)
   const [expanded, setExpanded] = useState({})
   const [replyExpanded, setReplyExpanded] = useState({})
   const [showDeliveryIssues, setShowDeliveryIssues] = useState(false)
@@ -30,6 +32,67 @@ export default function CampaignDetail() {
   useEffect(() => {
     fetchCampaign()
   }, [campaignId])
+
+  // Resume auto follow-up progress if a job is running server-side
+  // (the job lives on the server, so it continues even if this page was closed).
+  useEffect(() => {
+    let cancelled = false
+    api.get(`/campaign/${campaignId}/followup/auto-progress`)
+      .then(res => {
+        if (cancelled) return
+        const data = res.data
+        if (data && data.status && data.status !== 'idle') {
+          setAutoProgress(data)
+          if (data.status === 'generating' || data.status === 'sending') {
+            startAutoPolling()
+          }
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+      if (autoPollRef.current) clearInterval(autoPollRef.current)
+    }
+  }, [campaignId])
+
+  const startAutoPolling = () => {
+    if (autoPollRef.current) clearInterval(autoPollRef.current)
+    autoPollRef.current = setInterval(async () => {
+      try {
+        const res = await api.get(`/campaign/${campaignId}/followup/auto-progress`)
+        const data = res.data
+        setAutoProgress(data)
+        if (data.status === 'complete' || data.status === 'error') {
+          clearInterval(autoPollRef.current)
+          autoPollRef.current = null
+          fetchCampaign()  // refresh follow_up_sent flags
+        }
+      } catch {
+        clearInterval(autoPollRef.current)
+        autoPollRef.current = null
+      }
+    }, 2000)
+  }
+
+  const handleAutoFollowUp = async () => {
+    if (eligibleRecipients.length === 0) return
+    if (!window.confirm(
+      `This will automatically generate AND send follow-ups to all ${eligibleRecipients.length} eligible recipients. ` +
+      `Sending happens on the server and cannot be paused. Continue?`
+    )) return
+
+    setError('')
+    setAutoProgress({ status: 'generating', gen_total: eligibleRecipients.length, gen_completed: 0, gen_failed: 0, send_total: 0, send_current: 0, sent: 0, send_failed: 0, errors: [] })
+    try {
+      await api.post(`/campaign/${campaignId}/followup/auto`, {
+        global_context: followupContext,
+      })
+      startAutoPolling()
+    } catch (err) {
+      setError(err.response?.data?.error || 'Failed to start auto follow-up')
+      setAutoProgress(null)
+    }
+  }
 
   const fetchCampaign = () => {
     Promise.all([
@@ -242,13 +305,84 @@ export default function CampaignDetail() {
                   </div>
                 )}
               </div>
+            ) : autoProgress && autoProgress.status !== 'idle' ? (
+              <div className="generation-progress-box border border-amber-200 rounded-lg p-5 mt-2 bg-white shadow-sm text-left">
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-sm font-medium text-amber-800">
+                    {autoProgress.status === 'complete'
+                      ? '✅ Auto Follow-ups Complete'
+                      : autoProgress.status === 'error'
+                      ? '❌ Auto Follow-up Stopped'
+                      : autoProgress.status === 'sending'
+                      ? '📤 Sending Follow-ups...'
+                      : '⚡ Generating Follow-ups...'}
+                  </span>
+                  <span className="text-sm text-gray-500 font-mono">
+                    {autoProgress.status === 'sending' || autoProgress.status === 'complete'
+                      ? `${autoProgress.sent || 0} / ${autoProgress.send_total || 0} sent`
+                      : `${autoProgress.gen_completed || 0} / ${autoProgress.gen_total || 0} generated`}
+                  </span>
+                </div>
+
+                <div className="w-full bg-amber-100 rounded-full h-2 mb-3 overflow-hidden">
+                  <div
+                    className="bg-amber-500 h-2 rounded-full transition-all duration-500"
+                    style={{
+                      width: (() => {
+                        const isSend = autoProgress.status === 'sending' || autoProgress.status === 'complete'
+                        const done = isSend ? (autoProgress.sent || 0) + (autoProgress.send_failed || 0) : autoProgress.gen_completed || 0
+                        const tot = isSend ? autoProgress.send_total || 0 : autoProgress.gen_total || 0
+                        return tot > 0 ? `${Math.round((done / tot) * 100)}%` : '0%'
+                      })()
+                    }}
+                  />
+                </div>
+
+                <div className="flex gap-4 text-xs font-mono text-gray-500 flex-wrap">
+                  <span>✅ {autoProgress.gen_completed || 0} generated</span>
+                  <span>📤 {autoProgress.sent || 0} sent</span>
+                  {(autoProgress.gen_failed > 0 || autoProgress.send_failed > 0) && (
+                    <span className="text-red-500">❌ {(autoProgress.gen_failed || 0) + (autoProgress.send_failed || 0)} failed</span>
+                  )}
+                  {autoProgress.current_email && (
+                    <span className="text-amber-600 truncate ml-auto">→ {autoProgress.current_email}</span>
+                  )}
+                </div>
+
+                {autoProgress.errors && autoProgress.errors.length > 0 && (
+                  <div className="mt-3 text-[10px] font-mono text-red-600 bg-red-50 border border-red-200 rounded p-2 max-h-24 overflow-y-auto text-left">
+                    {autoProgress.errors.map((e, i) => (
+                      <div key={i} className="truncate"><span className="font-semibold">[{e.phase}] {e.email}:</span> {e.error}</div>
+                    ))}
+                  </div>
+                )}
+
+                {(autoProgress.status === 'complete' || autoProgress.status === 'error') && (
+                  <div className="mt-4 border-t border-amber-100 pt-3">
+                    <button
+                      onClick={() => setAutoProgress(null)}
+                      className="px-4 py-1.5 bg-zinc-700 text-white rounded text-xs hover:bg-zinc-800 font-medium"
+                    >
+                      Dismiss
+                    </button>
+                  </div>
+                )}
+              </div>
             ) : (
-              <button
-                onClick={handleFollowUp}
-                className="px-6 py-2 bg-amber-600 text-white text-sm font-medium rounded-none hover:bg-amber-700 transition-colors uppercase tracking-wide"
-              >
-                {`Generate Follow-ups for ${eligibleRecipients.length} eligible recipients`}
-              </button>
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={handleFollowUp}
+                  className="px-6 py-2 bg-white border border-amber-600 text-amber-700 text-sm font-medium rounded-none hover:bg-amber-50 transition-colors uppercase tracking-wide"
+                >
+                  {`Generate & Review (${eligibleRecipients.length})`}
+                </button>
+                <button
+                  onClick={handleAutoFollowUp}
+                  className="px-6 py-2 bg-amber-600 text-white text-sm font-medium rounded-none hover:bg-amber-700 transition-colors uppercase tracking-wide"
+                >
+                  {`Generate & Send Follow-ups (${eligibleRecipients.length})`}
+                </button>
+              </div>
             )}
           </div>
         )}
