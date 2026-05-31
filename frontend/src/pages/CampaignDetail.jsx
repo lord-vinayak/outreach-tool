@@ -33,17 +33,18 @@ export default function CampaignDetail() {
     fetchCampaign()
   }, [campaignId])
 
-  // Resume auto follow-up progress if a job is running server-side
-  // (the job lives on the server, so it continues even if this page was closed).
+  // On mount, resume polling if the batch worker is actively processing this campaign.
+  // The worker runs as a systemd service — it survives browser closes and API restarts.
   useEffect(() => {
     let cancelled = false
     api.get(`/campaign/${campaignId}/followup/auto-progress`)
       .then(res => {
         if (cancelled) return
         const data = res.data
+        const activeStatuses = ['queued', 'generating', 'sending']
         if (data && data.status && data.status !== 'idle') {
           setAutoProgress(data)
-          if (data.status === 'generating' || data.status === 'sending') {
+          if (activeStatuses.includes(data.status)) {
             startAutoPolling()
           }
         }
@@ -65,7 +66,7 @@ export default function CampaignDetail() {
         if (data.status === 'complete' || data.status === 'error') {
           clearInterval(autoPollRef.current)
           autoPollRef.current = null
-          fetchCampaign()  // refresh follow_up_sent flags
+          fetchCampaign()  // refresh follow_up_sent flags in the recipient list
         }
       } catch {
         clearInterval(autoPollRef.current)
@@ -77,19 +78,23 @@ export default function CampaignDetail() {
   const handleAutoFollowUp = async () => {
     if (eligibleRecipients.length === 0) return
     if (!window.confirm(
-      `This will automatically generate AND send follow-ups to all ${eligibleRecipients.length} eligible recipients. ` +
-      `Sending happens on the server and cannot be paused. Continue?`
+      `This will queue follow-ups for ${eligibleRecipients.length} eligible recipients.\n\n` +
+      `The batch worker will generate and send them automatically — this survives browser closes and server restarts. Continue?`
     )) return
 
     setError('')
-    setAutoProgress({ status: 'generating', gen_total: eligibleRecipients.length, gen_completed: 0, gen_failed: 0, send_total: 0, send_current: 0, sent: 0, send_failed: 0, errors: [] })
+    // Show "queued" immediately; worker will update to "generating" when it picks up the job
+    setAutoProgress({
+      status: 'queued', gen_total: eligibleRecipients.length, gen_completed: 0,
+      gen_failed: 0, send_total: 0, send_current: 0, sent: 0, send_failed: 0, errors: []
+    })
     try {
       await api.post(`/campaign/${campaignId}/followup/auto`, {
         global_context: followupContext,
       })
       startAutoPolling()
     } catch (err) {
-      setError(err.response?.data?.error || 'Failed to start auto follow-up')
+      setError(err.response?.data?.error || 'Failed to queue auto follow-up')
       setAutoProgress(null)
     }
   }
@@ -315,6 +320,8 @@ export default function CampaignDetail() {
                       ? '❌ Auto Follow-up Stopped'
                       : autoProgress.status === 'sending'
                       ? '📤 Sending Follow-ups...'
+                      : autoProgress.status === 'queued'
+                      ? '⏳ Queued — batch worker will pick up shortly...'
                       : '⚡ Generating Follow-ups...'}
                   </span>
                   <span className="text-sm text-gray-500 font-mono">

@@ -1,14 +1,18 @@
 """
 Autonomous batch worker for large-scale email campaigns.
-Run as a systemd service on EC2. Processes campaigns with auto_mode=1.
+Run as a systemd service on EC2. Processes campaigns with auto_mode=1,
+and handles follow-up generation/sending for any campaign where the user
+has clicked "Generate & Send Follow-ups" (followup_queued = 1).
 
 Loop behaviour:
-  1. Try to generate a mini-batch of emails (respects daily provider quotas).
-  2. Try to send one ready email (respects Gmail 1900/day limit).
-  3. If all quotas exhausted, sleep until midnight UTC and retry.
-  4. If nothing left to do, idle-poll every 5 minutes for new campaigns.
+  1. Try to generate a mini-batch of initial emails (respects daily provider quotas).
+  2. Generate follow-ups for any campaign with followup_queued=1 (Groq, sequential).
+  3. Send one ready email — initial first, then follow-up drafts (gmail_sent quota).
+  4. If all quotas exhausted, sleep up to RECHECK_INTERVAL then retry.
+  5. If nothing left to do, idle-poll every 5 minutes for new work.
 """
 
+import itertools
 import os
 import sys
 import json
@@ -21,7 +25,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config import load_config
 from db import get_db, query_db
-from ai_generator import generate_email_auto
+from ai_generator import generate_email_auto, generate_contextual_followup
 from email_sender import send_email
 import quota_tracker
 
@@ -29,6 +33,9 @@ import quota_tracker
 
 LOG_PATH    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker.log")
 STATUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "worker_status.json")
+
+# Per-campaign follow-up job progress (written by worker, read by API).
+FOLLOWUP_STATUS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "followup_status.json")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -40,21 +47,20 @@ logging.basicConfig(
 )
 log = logging.getLogger("batch_worker")
 
-RESUME_PATH   = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "resume.pdf")
-GENERATE_BATCH = 15      # Generate this many per loop before switching to send
-GEMINI_RPM_SLEEP   = 4  # Seconds between Gemini calls to respect 15 RPM limit
-CEREBRAS_RPM_SLEEP = 2  # Seconds between Cerebras calls to respect 30 RPM limit
-RECHECK_INTERVAL   = 1800  # Max seconds to sleep when nothing is actionable (30 min).
-                           # Caps the old "sleep until midnight" so a transient stall
-                           # (or a sleep computed just after midnight) can't kill a day.
+RESUME_PATH            = os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads", "resume.pdf")
+GENERATE_BATCH         = 15   # Initial emails generated per loop iteration
+GEMINI_RPM_SLEEP       = 4    # Seconds between Gemini calls  (15 RPM limit)
+CEREBRAS_RPM_SLEEP     = 2    # Seconds between Cerebras calls (30 RPM limit)
+GROQ_FOLLOWUP_RPM_SLEEP = 2   # Seconds between Groq calls for follow-up generation
+RECHECK_INTERVAL       = 1800 # Max sleep when nothing is actionable (30 min cap).
 
 
-# ── Status file ────────────────────────────────────────────────────────────────
+# ── Worker status file ─────────────────────────────────────────────────────────
 
 def _write_status(action: str, extra: dict = None):
     try:
         status = {
-            "running":      True,
+            "running":       True,
             "last_activity": datetime.now(timezone.utc).isoformat(),
             "last_action":   action,
             **(extra or {}),
@@ -78,7 +84,30 @@ def _write_stopped():
         pass
 
 
-# ── DB helpers ─────────────────────────────────────────────────────────────────
+# ── Follow-up status file ──────────────────────────────────────────────────────
+# Single JSON file keyed by campaign_id (as string).
+# Read by GET /api/campaign/<id>/followup/auto-progress in app.py.
+
+def _write_followup_status(campaign_id: int, updates: dict):
+    """Merge `updates` into the per-campaign entry in followup_status.json."""
+    try:
+        data = {}
+        if os.path.exists(FOLLOWUP_STATUS_PATH):
+            with open(FOLLOWUP_STATUS_PATH) as f:
+                data = json.load(f)
+        key = str(campaign_id)
+        if key not in data:
+            data[key] = {}
+        data[key].update(updates)
+        data[key]["campaign_id"] = campaign_id
+        data[key]["updated_at"]  = datetime.now(timezone.utc).isoformat()
+        with open(FOLLOWUP_STATUS_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
+# ── DB helpers — initial emails ────────────────────────────────────────────────
 
 def get_pending_generation(limit: int = GENERATE_BATCH):
     """Recipients that need AI generation (draft, no subject yet, in auto campaigns,
@@ -117,10 +146,8 @@ def get_next_to_send():
 
 def count_pending():
     # Must mirror the WHERE clauses of get_pending_generation / get_next_to_send,
-    # INCLUDING the blocked-domain exclusion. Otherwise the worker can count work
-    # that the actual fetch queries refuse to return (e.g. all remaining drafts are
-    # on blocked domains) → it thinks there is work, does nothing, and falls into
-    # the "exhausted" 24h sleep even though no quota is actually exhausted.
+    # INCLUDING the blocked-domain exclusion, to avoid the "counted work that the
+    # fetch query won't return → false exhaustion sleep" bug.
     row = query_db("""
         SELECT
             SUM(CASE WHEN r.subject IS NULL  THEN 1 ELSE 0 END) AS need_gen,
@@ -134,7 +161,73 @@ def count_pending():
     return (row["need_gen"] or 0), (row["need_send"] or 0)
 
 
-# ── Core actions ───────────────────────────────────────────────────────────────
+# ── DB helpers — follow-ups ────────────────────────────────────────────────────
+
+def get_best_groq_provider(config: dict):
+    """Return (provider_key, api_key) for the first Groq key with remaining quota.
+    Returns None if all Groq keys are exhausted or unconfigured.
+    Follow-up generation uses Groq (generate_contextual_followup is Groq-only)."""
+    candidates = [
+        ("groq_1", config.get("groq_api_key",   "").strip()),
+        ("groq_2", config.get("groq_api_key_2",  "").strip()),
+        ("groq_3", config.get("groq_api_key_3",  "").strip()),
+    ]
+    for provider, key in candidates:
+        if key and quota_tracker.can_use(provider):
+            return provider, key
+    return None
+
+
+def get_queued_followup_campaigns():
+    """Campaigns flagged for follow-up generation by the worker (followup_queued=1)."""
+    return query_db("""
+        SELECT id, name, goal, additional_context
+        FROM campaigns
+        WHERE followup_queued = 1
+        ORDER BY id ASC
+    """)
+
+
+def get_followup_eligible_for_campaign(campaign_id: int):
+    """Recipients in `campaign_id` that are eligible for a follow-up:
+    original email sent, no follow-up yet, not excluded, not terminal reply, domain not blocked."""
+    return query_db("""
+        SELECT *
+        FROM recipients
+        WHERE campaign_id = ?
+          AND status      = 'sent'
+          AND follow_up_sent  = 0
+          AND exclude_followup = 0
+          AND reply_status NOT IN
+              ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
+          AND LOWER(SUBSTR(email, INSTR(email, '@') + 1))
+              NOT IN (SELECT domain FROM blocked_domains)
+        ORDER BY id ASC
+    """, (campaign_id,))
+
+
+def get_next_followup_to_send():
+    """Next follow-up draft that the worker should send automatically (auto_send=1,
+    domain not blocked).  Returns None if nothing is queued."""
+    return query_db("""
+        SELECT f.*,
+               r.email      AS recipient_email,
+               r.name       AS recipient_name,
+               r.message_id AS original_message_id,
+               r.id         AS rid,
+               r.campaign_id AS campaign_id
+        FROM followups f
+        JOIN recipients r ON r.id = f.recipient_id
+        WHERE f.status    = 'draft'
+          AND f.auto_send = 1
+          AND LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1))
+              NOT IN (SELECT domain FROM blocked_domains)
+        ORDER BY f.id ASC
+        LIMIT 1
+    """, one=True)
+
+
+# ── Core actions — initial emails ──────────────────────────────────────────────
 
 def generate_batch(config: dict) -> int:
     """
@@ -151,7 +244,7 @@ def generate_batch(config: dict) -> int:
         return 0
 
     log.info(f"Generating {len(pending)} emails using [{provider}]...")
-    profile      = config.get("profile", {})
+    profile       = config.get("profile", {})
     resume_parsed = config.get("resume_parsed", {})
     success = 0
 
@@ -193,12 +286,10 @@ def generate_batch(config: dict) -> int:
             log.error(f"  Generation failed for {r['email']}: {e}")
             err = str(e).lower()
             if any(x in err for x in ["resource_exhausted", "daily limit", "rate limit", "429"]):
-                # Only mark exhausted after internal retries have failed — real daily limit.
                 log.warning(f"  [{provider}] daily limit confirmed — marking exhausted, switching provider.")
                 quota_tracker.mark_exhausted(provider)
                 break
             if any(x in err for x in ["404", "not_found", "does not exist", "no access", "model_not_found"]):
-                # Model unavailable / wrong ID — provider unusable, switch immediately.
                 log.warning(f"  [{provider}] model not found / no access — marking exhausted, switching provider.")
                 quota_tracker.mark_exhausted(provider)
                 break
@@ -208,10 +299,8 @@ def generate_batch(config: dict) -> int:
 
 
 def send_one(config: dict) -> bool:
-    """
-    Send the next ready email.
-    Returns True if an email was sent (or failed and marked), False if nothing to send.
-    """
+    """Send the next ready initial email.
+    Returns True if an email was sent (or failed and marked), False if nothing to send."""
     r = get_next_to_send()
     if not r:
         return False
@@ -255,6 +344,221 @@ def send_one(config: dict) -> bool:
         return True  # Still "processed" this slot
 
 
+# ── Core actions — follow-ups ──────────────────────────────────────────────────
+
+def generate_followup_campaign(campaign: dict, config: dict) -> int:
+    """Generate follow-up drafts for all eligible recipients in one campaign.
+
+    Uses Groq round-robin across all configured keys (generate_contextual_followup
+    is Groq-only).  Quota is tracked via quota_tracker (groq_1/2/3 counters).
+
+    Sets followup_queued=0 on the campaign when done (success or partial failure),
+    so the campaign never gets stuck in the queue.  Returns count of drafts created.
+    """
+    campaign_id   = campaign["id"]
+    campaign_name = campaign["name"]
+
+    recipients = get_followup_eligible_for_campaign(campaign_id)
+    if not recipients:
+        log.info(f"Campaign [{campaign_id}] '{campaign_name}': no eligible recipients for follow-up.")
+        conn = get_db()
+        conn.execute("UPDATE campaigns SET followup_queued = 0 WHERE id = ?", (campaign_id,))
+        conn.commit()
+        conn.close()
+        _write_followup_status(campaign_id, {
+            "status": "complete", "gen_total": 0, "gen_completed": 0, "gen_failed": 0,
+            "send_total": 0, "send_current": 0, "sent": 0, "send_failed": 0,
+            "current_email": "", "errors": [],
+        })
+        return 0
+
+    log.info(f"Campaign [{campaign_id}] '{campaign_name}': generating {len(recipients)} follow-ups...")
+    _write_followup_status(campaign_id, {
+        "status": "generating",
+        "gen_total": len(recipients), "gen_completed": 0, "gen_failed": 0,
+        "send_total": 0, "send_current": 0, "sent": 0, "send_failed": 0,
+        "current_email": "", "errors": [],
+    })
+
+    profile       = config.get("profile", {})
+    resume_parsed = config.get("resume_parsed", {})
+
+    # Build a round-robin cycle over available Groq keys
+    groq_keys = []
+    for field in ["groq_api_key", "groq_api_key_2", "groq_api_key_3"]:
+        val = config.get(field, "").strip()
+        if val:
+            groq_keys.append(val)
+    key_cycle = itertools.cycle(groq_keys) if groq_keys else None
+
+    success = 0
+    errors  = []
+
+    for r in recipients:
+        # Check Groq quota before each call
+        groq_info = get_best_groq_provider(config)
+        if not groq_info:
+            log.info(f"  All Groq quotas exhausted mid-follow-up generation for campaign {campaign_id}.")
+            errors.append({"email": r["email"], "error": "Groq quota exhausted"})
+            break
+
+        provider, _ = groq_info
+        api_key = next(key_cycle) if key_cycle else ""
+
+        try:
+            result = generate_contextual_followup(
+                profile=profile,
+                original_subject=r["subject"],
+                original_body=r["email_body"],
+                recipient_email=r["email"],
+                recipient_name=r["name"],
+                reply_status=r["reply_status"] or "no_reply",
+                reply_content=r["reply_content"],
+                check_back_date=r["check_back_date"],
+                global_context="",
+                api_key=api_key,
+                resume_parsed=resume_parsed,
+            )
+            conn = get_db()
+            conn.execute(
+                "INSERT INTO followups (recipient_id, subject, email_body, status, auto_send) "
+                "VALUES (?, ?, ?, 'draft', 1)",
+                (r["id"], result["subject"], result["body"]),
+            )
+            conn.commit()
+            conn.close()
+
+            quota_tracker.increment(provider)
+            success += 1
+            log.info(f"  Follow-up generated [{provider}]: {r['email']}")
+            _write_followup_status(campaign_id, {"gen_completed": success})
+            time.sleep(GROQ_FOLLOWUP_RPM_SLEEP)
+
+        except Exception as e:
+            log.error(f"  Follow-up generation failed for {r['email']}: {e}")
+            errors.append({"email": r["email"], "error": str(e)})
+            err = str(e).lower()
+            if any(x in err for x in ["daily rate limit", "tokens per day", "requests per day",
+                                       "resource_exhausted", "daily limit"]):
+                quota_tracker.mark_exhausted(provider)
+                log.warning(f"  [{provider}] Groq daily limit hit during follow-up generation.")
+                break
+            time.sleep(2)
+
+    # Count drafts ready to send (what we just inserted)
+    send_total_row = query_db("""
+        SELECT COUNT(*) AS cnt FROM followups f
+        JOIN recipients r ON r.id = f.recipient_id
+        WHERE r.campaign_id = ? AND f.status = 'draft' AND f.auto_send = 1
+    """, (campaign_id,), one=True)
+    send_total = send_total_row["cnt"] if send_total_row else 0
+
+    # Release the queue flag regardless of success/failure
+    conn = get_db()
+    conn.execute("UPDATE campaigns SET followup_queued = 0 WHERE id = ?", (campaign_id,))
+    conn.commit()
+    conn.close()
+
+    _write_followup_status(campaign_id, {
+        "status":        "sending" if send_total > 0 else "complete",
+        "gen_total":     len(recipients),
+        "gen_completed": success,
+        "gen_failed":    len(recipients) - success,
+        "send_total":    send_total,
+        "errors":        errors,
+    })
+
+    log.info(f"Campaign [{campaign_id}]: follow-up generation done — "
+             f"{success}/{len(recipients)} generated, {send_total} drafts queued for send.")
+    return success
+
+
+def send_one_followup(config: dict) -> bool:
+    """Send the next auto_send follow-up draft.
+    Returns True if a follow-up was sent (or failed and marked), False if none pending."""
+    f = get_next_followup_to_send()
+    if not f:
+        return False
+
+    if not quota_tracker.can_use("gmail_sent"):
+        return False
+
+    campaign_id = f["campaign_id"]
+
+    try:
+        message_id = send_email(
+            sender_email=config["gmail_address"],
+            sender_name=config["profile"]["name"],
+            app_password=config["gmail_app_password"],
+            recipient_email=f["recipient_email"],
+            subject=f["subject"],
+            body=f["email_body"],
+            resume_path=None,   # follow-ups are threaded replies — no resume attachment
+            reply_to_message_id=f["original_message_id"],
+        )
+        conn = get_db()
+        conn.execute(
+            "UPDATE followups SET status = 'sent', sent_at = ? WHERE id = ?",
+            (datetime.utcnow().isoformat(), f["id"]),
+        )
+        conn.execute(
+            "UPDATE recipients SET follow_up_sent = 1 WHERE id = ?",
+            (f["rid"],),
+        )
+        conn.commit()
+        conn.close()
+
+        quota_tracker.increment("gmail_sent")
+        log.info(f"  Follow-up sent → {f['recipient_email']}")
+        _write_status(f"Follow-up sent → {f['recipient_email']}")
+
+        # Update per-campaign progress in followup_status.json
+        _increment_followup_send_count(campaign_id, sent=1)
+        return True
+
+    except Exception as e:
+        log.error(f"  Follow-up send failed for {f['recipient_email']}: {e}")
+        conn = get_db()
+        conn.execute(
+            "UPDATE followups SET status = 'failed', error_message = ? WHERE id = ?",
+            (str(e), f["id"]),
+        )
+        conn.commit()
+        conn.close()
+        _increment_followup_send_count(campaign_id, failed=1)
+        time.sleep(5)
+        return True  # Still "processed" this slot
+
+
+def _increment_followup_send_count(campaign_id: int, sent: int = 0, failed: int = 0):
+    """Read-modify-write the send counters in followup_status.json for one campaign."""
+    try:
+        data = {}
+        if os.path.exists(FOLLOWUP_STATUS_PATH):
+            with open(FOLLOWUP_STATUS_PATH) as f:
+                data = json.load(f)
+        key = str(campaign_id)
+        if key not in data:
+            data[key] = {}
+        entry = data[key]
+        entry["sent"]        = entry.get("sent", 0) + sent
+        entry["send_failed"] = entry.get("send_failed", 0) + failed
+        entry["send_current"] = entry.get("send_current", 0) + sent + failed
+
+        # Mark complete when all drafts are accounted for
+        total = entry.get("send_total", 0)
+        done  = entry.get("send_current", 0)
+        if total > 0 and done >= total:
+            entry["status"] = "complete"
+            entry["current_email"] = ""
+
+        entry["updated_at"] = datetime.now(timezone.utc).isoformat()
+        with open(FOLLOWUP_STATUS_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+    except Exception:
+        pass
+
+
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
 def run():
@@ -267,9 +571,15 @@ def run():
         while True:
             config = load_config()
 
-            need_gen, need_send = count_pending()
+            need_gen, need_send       = count_pending()
+            followup_campaigns        = get_queued_followup_campaigns()
+            has_followup_drafts       = get_next_followup_to_send() is not None
 
-            if need_gen == 0 and need_send == 0:
+            nothing_to_do = (
+                need_gen == 0 and need_send == 0
+                and len(followup_campaigns) == 0 and not has_followup_drafts
+            )
+            if nothing_to_do:
                 log.info("Nothing pending. Idling — will check again in 5 min.")
                 _write_status("Idle — no pending work")
                 time.sleep(300)
@@ -277,7 +587,7 @@ def run():
 
             did_something = False
 
-            # ── Generate a mini-batch ──────────────────────────────────────
+            # ── Generate a mini-batch of initial emails ────────────────────
             if need_gen > 0:
                 provider_info = quota_tracker.get_best_generation_provider(config)
                 if provider_info:
@@ -294,17 +604,28 @@ def run():
                             },
                         )
                     elif quota_tracker.get_best_generation_provider(config):
-                        # Provider was marked exhausted mid-batch (e.g. 404/model error).
-                        # Another provider is available — keep looping, don't sleep.
+                        # Provider was marked exhausted mid-batch (e.g. 404/model error)
+                        # but another is available — keep looping, don't sleep.
                         log.info("Provider failed and was marked exhausted — retrying with next provider.")
                         did_something = True
                 else:
                     log.info("All generation quotas exhausted for today.")
 
-            # ── Send one email ─────────────────────────────────────────────
-            if need_send > 0 or (need_gen == 0):
+            # ── Generate follow-ups for queued campaigns ───────────────────
+            for campaign in followup_campaigns:
+                if not get_best_groq_provider(config):
+                    log.info("No Groq quota available for follow-up generation — skipping.")
+                    break
+                generate_followup_campaign(campaign, config)
+                did_something = True   # campaign was dequeued regardless of partial failure
+
+            # ── Send one email (initial first, then follow-up) ─────────────
+            if need_send > 0 or has_followup_drafts:
                 if quota_tracker.can_use("gmail_sent"):
+                    # Initial emails take priority; fall back to follow-up drafts.
                     sent = send_one(config)
+                    if not sent:
+                        sent = send_one_followup(config)
                     if sent:
                         did_something = True
                         delay = config.get("send_delay_seconds", 30)
@@ -313,12 +634,8 @@ def run():
                     log.info("Gmail daily limit reached (1900). Waiting for midnight UTC.")
 
             # ── Sleep if nothing was actionable ────────────────────────────
-            # We may be here because (a) all daily quotas are genuinely exhausted,
-            # or (b) a transient/non-quota reason (e.g. the only remaining drafts
-            # are momentarily not sendable). Cap the sleep so case (b) — or a sleep
-            # computed just after midnight that would otherwise be ~24h — can never
-            # park the worker for the whole day. It wakes, re-evaluates, and either
-            # resumes work or sleeps again. Worst case we lose RECHECK_INTERVAL.
+            # Cap at RECHECK_INTERVAL so a stall just after midnight (where
+            # seconds_until_midnight_utc ≈ 24h) can't park the worker all day.
             if not did_something:
                 secs_to_midnight = quota_tracker.seconds_until_midnight_utc()
                 sleep_secs = min(secs_to_midnight, RECHECK_INTERVAL)

@@ -43,6 +43,26 @@ def migrate_auto_mode_column(conn):
     conn.commit()
 
 
+def migrate_followup_queued_column(conn):
+    """Add followup_queued flag to campaigns so the batch worker can own follow-up jobs.
+    1 = worker should generate+send follow-ups for this campaign; 0 = idle."""
+    cursor = conn.cursor()
+    existing = [row[1] for row in cursor.execute("PRAGMA table_info(campaigns)").fetchall()]
+    if "followup_queued" not in existing:
+        cursor.execute("ALTER TABLE campaigns ADD COLUMN followup_queued INTEGER DEFAULT 0")
+    conn.commit()
+
+
+def migrate_followup_auto_send_column(conn):
+    """Add auto_send flag to followups rows so the worker knows which drafts
+    it should send automatically (vs. drafts created by the manual review flow)."""
+    cursor = conn.cursor()
+    existing = [row[1] for row in cursor.execute("PRAGMA table_info(followups)").fetchall()]
+    if "auto_send" not in existing:
+        cursor.execute("ALTER TABLE followups ADD COLUMN auto_send INTEGER DEFAULT 0")
+    conn.commit()
+
+
 def migrate_blocked_domains_table(conn):
     """Safe migration: create blocked_domains table if it doesn't exist."""
     conn.execute("""
@@ -108,6 +128,8 @@ def init_db():
 
     migrate_blocked_domains_table(conn)
     migrate_auto_mode_column(conn)
+    migrate_followup_queued_column(conn)
+    migrate_followup_auto_send_column(conn)
     conn.close()
 
 
