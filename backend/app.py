@@ -1003,10 +1003,6 @@ def send_followups(campaign_id):
     if not is_settings_complete(config):
         return jsonify({"error": "Credentials not configured"}), 400
 
-    resume_path = os.path.join(UPLOAD_FOLDER, "resume.pdf")
-    if not os.path.exists(resume_path):
-        return jsonify({"error": "Resume PDF not found"}), 400
-
     followups = query_db("""
         SELECT f.*, r.email as recipient_email, r.name as recipient_name,
                r.message_id as original_message_id, r.id as rid
@@ -1034,7 +1030,7 @@ def send_followups(campaign_id):
 
     thread = threading.Thread(
         target=_send_followup_thread,
-        args=(campaign_id, followups, config, resume_path, progress_key),
+        args=(campaign_id, followups, config, progress_key),
         daemon=True,
     )
     thread.start()
@@ -1042,8 +1038,8 @@ def send_followups(campaign_id):
     return jsonify({"message": "Follow-up sending started", "total": len(followups), "progress_key": progress_key})
 
 
-def _send_followup_thread(campaign_id, followups, config, resume_path, progress_key):
-    """Background thread that sends follow-up emails."""
+def _send_followup_thread(campaign_id, followups, config, progress_key):
+    """Background thread that sends follow-up emails (no resume attached — it's a reply)."""
     delay = config.get("send_delay_seconds", 60)
     progress = send_progress[progress_key]
 
@@ -1060,7 +1056,7 @@ def _send_followup_thread(campaign_id, followups, config, resume_path, progress_
                 recipient_email=f["recipient_email"],
                 subject=f["subject"],
                 body=f["email_body"],
-                resume_path=resume_path,
+                resume_path=None,   # follow-ups are replies — no resume attachment
                 reply_to_message_id=f["original_message_id"],
             )
             conn.execute(
@@ -1147,10 +1143,6 @@ def auto_followup(campaign_id):
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
 
-    resume_path = os.path.join(UPLOAD_FOLDER, "resume.pdf")
-    if not os.path.exists(resume_path):
-        return jsonify({"error": "Resume PDF not found"}), 400
-
     # Don't start a second job for the same campaign while one is active.
     existing = auto_followup_progress.get(campaign_id)
     if existing and existing.get("status") in ("generating", "sending"):
@@ -1178,7 +1170,7 @@ def auto_followup(campaign_id):
 
     thread = threading.Thread(
         target=_auto_followup_thread,
-        args=(campaign_id, recipients, config, resume_path, global_context),
+        args=(campaign_id, recipients, config, global_context),
         daemon=True,
     )
     thread.start()
@@ -1189,7 +1181,7 @@ def auto_followup(campaign_id):
     })
 
 
-def _auto_followup_thread(campaign_id, recipients, config, resume_path, global_context):
+def _auto_followup_thread(campaign_id, recipients, config, global_context):
     """Phase 1: generate a draft follow-up per recipient (parallel, Groq).
        Phase 2: send each draft as a threaded reply, sequentially with delay."""
     progress = auto_followup_progress[campaign_id]
@@ -1281,7 +1273,7 @@ def _auto_followup_thread(campaign_id, recipients, config, resume_path, global_c
                 recipient_email=f["recipient_email"],
                 subject=f["subject"],
                 body=f["email_body"],
-                resume_path=resume_path,
+                resume_path=None,   # follow-ups are replies — no resume attachment
                 reply_to_message_id=f["original_message_id"],
             )
             conn.execute(
