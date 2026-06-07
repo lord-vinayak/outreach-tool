@@ -3,6 +3,13 @@
 A powerful, local-first personal email outreach tool that generates unique, human-sounding personalized emails using the Groq API and sends them via Gmail SMTP with automated resume attachments.
 
 **Single-user • Localhost-only • Privacy-focused**
+---
+## Demo
+
+<video width="630" height="300" src="https://github.com/user-attachments/assets/da78db07-0ccb-463e-ad02-e3029b84d825"></video>
+
+
+
 
 ---
 
