@@ -7,58 +7,32 @@ import re
 import json
 from groq import Groq
 
-_company_cache = {}
+_company_cache = {
+    "gmail.com": "Company",
+    "yahoo.com": "Company",
+    "outlook.com": "Company",
+    "hotmail.com": "Company",
+    "google.com": "Google",
+    "microsoft.com": "Microsoft",
+    "amazon.com": "Amazon",
+    "apple.com": "Apple",
+    "meta.com": "Meta",
+}
 
-def resolve_company_name(domain: str, groq_api_key: str) -> str:
+def resolve_company_name(domain: str, groq_api_key: str = None) -> str:
     """
-    Resolve proper company name from domain using Groq only.
-    No web search — Groq's training data knows most companies,
-    and can intelligently parse unknown domain names.
+    Fast local resolution of company name from domain to eliminate extra blocking API calls.
     """
     domain_clean = domain.lower().strip()
-
     if domain_clean in _company_cache:
         return _company_cache[domain_clean]
 
-    fallback = domain_clean.split(".")[0].replace("-", " ").replace("_", " ").title()
+    name_part = domain_clean.split(".")[0]
+    name_clean = re.sub(r'[-_]', ' ', name_part).title()
+    name_clean = re.sub(r'\bIts\b', 'IT Solutions', name_clean)
 
-    try:
-        client = Groq(api_key=groq_api_key)
-        response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a company name resolver. Given a website domain, return the official "
-                        "company/organization name. Use your training knowledge first. If the company "
-                        "is not well-known, intelligently parse the domain — e.g. 'nisargaits.com' → "
-                        "'Nisarga IT Solutions', 'techaheadcorp.com' → 'TechAhead Corp', "
-                        "'logicboots.com' → 'LogicBoots'. "
-                        "Return ONLY valid JSON: {\"company_name\": \"Name Here\"}. Never return null."
-                    )
-                },
-                {
-                    "role": "user",
-                    "content": f"What is the official company name for the domain: {domain_clean}"
-                }
-            ],
-            temperature=0.1,
-            response_format={"type": "json_object"}
-        )
-
-        result = json.loads(response.choices[0].message.content)
-        company_name = result.get("company_name", fallback).strip()
-
-        if not company_name or len(company_name) > 60:
-            company_name = fallback
-
-    except Exception as e:
-        print(f"Company name lookup failed for {domain_clean}: {e}")
-        company_name = fallback
-
-    _company_cache[domain_clean] = company_name
-    return company_name
+    _company_cache[domain_clean] = name_clean
+    return name_clean
     """
     Resolve a proper company name from an email domain.
     e.g. nisargaits.com → Nisarga IT Solutions

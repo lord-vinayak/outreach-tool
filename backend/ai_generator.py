@@ -10,7 +10,7 @@ import time
 from groq import Groq
 from utils import resolve_company_name
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 SYSTEM_PROMPT = """You are helping a college student write personalised cold outreach emails for internship/job opportunities.
 These emails will be sent directly from the student's Gmail. They must feel like real, human-written emails — not templates, not cover letters, not LinkedIn messages.
@@ -351,7 +351,7 @@ TONE & INTENT:
 TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 
-def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama/llama-4-scout-17b-16e-instruct"):
+def _call_groq(system_prompt, user_prompt, api_key, retries=4, model=GROQ_MODEL):
     """
     Call the Groq API and parse the JSON response.
     Retries on rate limits or service unavailable.
@@ -389,33 +389,35 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
             raise Exception(f"Failed to parse Groq response after {retries} attempts: {e}")
             
         except Exception as e:
+            last_error = e
             err_str = str(e).upper()
             FALLBACK_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.3-70b-versatile",
-    "qwen/qwen3-32b",
-    "llama-3.1-8b-instant",
-]
+                "llama-3.1-8b-instant",
+                "llama-3.3-70b-versatile",
+                "llama-3.2-11b-vision-preview",
+                "llama-3.2-3b-preview",
+            ]
 
-        if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
-            try:
-                current_index = FALLBACK_MODELS.index(model)
-            except ValueError:
-                current_index = -1
+            if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str or "RATE_LIMIT" in err_str or "429" in err_str:
+                try:
+                    current_index = FALLBACK_MODELS.index(model)
+                except ValueError:
+                    current_index = -1
 
-            if current_index < len(FALLBACK_MODELS) - 1:
-                next_model = FALLBACK_MODELS[current_index + 1]
-                print(f"Rate limit hit on {model}. Trying next model: {next_model}...")
-                return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
+                if current_index < len(FALLBACK_MODELS) - 1:
+                    next_model = FALLBACK_MODELS[current_index + 1]
+                    print(f"Rate limit hit on {model}. Waiting 2s and trying next model: {next_model}...")
+                    time.sleep(2)
+                    return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
 
-            raise Exception(f"All models exhausted due to rate limits. Try again later.")
+                raise Exception(f"All models exhausted due to rate limits: {e}")
                 
-            if "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
-                last_error = e
+            elif "503" in err_str or "UNAVAILABLE" in err_str or "OVERLOADED" in err_str:
                 wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
                 print(f"Groq API error ({e}) on model {model} — retrying in {wait}s (attempt {attempt+1}/{retries})")
                 time.sleep(wait)
             else:
-                 raise Exception(f"Groq API error: {e}")
+                raise Exception(f"Groq API error: {e}")
 
     raise Exception(f"Groq API unavailable/failed after {retries} retries. Last error: {last_error}")
+
