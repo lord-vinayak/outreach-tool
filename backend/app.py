@@ -5,7 +5,8 @@ Flask application with all API routes for the outreach tool.
 import os
 import threading
 import time
-from datetime import datetime
+import random
+from datetime import datetime, timezone
 
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -406,11 +407,13 @@ def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume
     """
     progress = generation_progress[campaign_id]
     
-    num_workers = min(len(recipients), 10)
+    # Cap max workers to 3 (matching max Groq API keys) to avoid TPM rate limit spikes
+    num_workers = min(len(recipients), 3)
     
     def generate_one(r):
         """Generate email for a single recipient. Returns (recipient_id, result_or_error)."""
         api_key = get_next_groq_key(key_cycle)
+        time.sleep(random.uniform(0.1, 0.5))
         try:
             result = generate_email(
                 profile=profile,
@@ -1280,26 +1283,39 @@ def reengagement_candidates():
 
 @app.route("/api/inbox/check", methods=["POST"])
 def manual_inbox_check():
-    """Manually trigger inbox monitoring — same as scheduled job."""
+    """Manually trigger inbox monitoring asynchronously in a background thread."""
     if _monitor_lock.locked():
-        return jsonify({"error": "Monitor is already running. Please wait."}), 429
+        return jsonify({"error": "Monitor is already running. Please wait.", "status": "running"}), 429
 
     from config import load_config
     from db import get_db
     config = load_config()
-    conn = get_db()
 
-    try:
+    global _last_monitor_result
+    _last_monitor_result = {
+        "status": "running",
+        "last_run": datetime.now(timezone.utc).isoformat(),
+        "triggered_by": "manual"
+    }
+
+    def _run_inbox_background():
+        global _last_monitor_result
         with _monitor_lock:
-            result = run_inbox_monitor(config, conn)
-            result["triggered_by"] = "manual"
-            global _last_monitor_result
-            _last_monitor_result = result
-            return jsonify(result)
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-    finally:
-        conn.close()
+            conn = get_db()
+            try:
+                result = run_inbox_monitor(config, conn)
+                result["status"] = "complete"
+                result["triggered_by"] = "manual"
+                _last_monitor_result = result
+            except Exception as e:
+                _last_monitor_result = {"status": "error", "error": str(e)}
+            finally:
+                conn.close()
+
+    thread = threading.Thread(target=_run_inbox_background, daemon=True)
+    thread.start()
+
+    return jsonify({"message": "Inbox check started", "status": "running"})
 
 @app.route("/api/inbox/status", methods=["GET"])
 def inbox_status():

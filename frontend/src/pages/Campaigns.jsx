@@ -53,6 +53,21 @@ export default function Campaigns() {
     }, 2000)
   }
 
+  const handleDeleteCampaign = async (campaignId, campaignName) => {
+    const confirmed = window.confirm(
+      `Are you sure you want to delete "${campaignName}"? This will permanently remove all recipients and email history for this campaign.`
+    )
+    if (!confirmed) return
+
+    try {
+      await api.delete(`/campaign/${campaignId}`)
+      fetchCampaigns()
+    } catch (err) {
+      const msg = err.response?.data?.error || 'Failed to delete campaign.'
+      alert(msg)
+    }
+  }
+
   if (loading) {
     return <div className="text-center py-12 text-gray-500">Loading campaigns...</div>
   }
@@ -89,7 +104,7 @@ export default function Campaigns() {
                 <th className="text-center px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Recipients</th>
                 <th className="text-center px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sent</th>
                 <th className="text-center px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Failed</th>
-                <th className="text-right px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider"></th>
+                <th className="text-right px-5 py-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-200">
@@ -141,12 +156,25 @@ export default function Campaigns() {
                         </div>
                       )}
 
-                      <Link
-                        to={`/campaign/${c.id}`}
-                        className="text-indigo-600 hover:underline font-medium text-sm"
-                      >
-                        View Details
-                      </Link>
+                      <div className="flex items-center gap-3">
+                        <Link
+                          to={`/campaign/${c.id}`}
+                          className="text-indigo-600 hover:text-indigo-800 font-medium text-sm transition-colors"
+                        >
+                          View Details
+                        </Link>
+                        <button
+                          id={`delete-campaign-${c.id}`}
+                          onClick={() => handleDeleteCampaign(c.id, c.name)}
+                          className="text-xs px-2 py-1 text-red-600 hover:text-red-700 hover:bg-red-50 border border-red-200 rounded-none transition-colors font-medium flex items-center gap-1"
+                          title="Delete Campaign"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                          </svg>
+                          Delete
+                        </button>
+                      </div>
                     </div>
                   </td>
                 </tr>
@@ -158,3 +186,4 @@ export default function Campaigns() {
     </div>
   )
 }
+

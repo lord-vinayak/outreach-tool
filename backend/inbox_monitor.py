@@ -207,25 +207,73 @@ def apply_ooo_update(conn, recipient_id: int, return_date: str | None) -> None:
     """, (return_date, datetime.now(timezone.utc).isoformat(), recipient_id))
     conn.commit()
 
+def get_all_db_emails(conn) -> set:
+    """Get lowercased set of all recipient emails stored in DB for fast lookup."""
+    cursor = conn.cursor()
+    cursor.execute("SELECT LOWER(email) FROM recipients")
+    return {row[0] for row in cursor.fetchall() if row[0]}
+
+
+def classify_email_fast(sender: str, subject: str, body: str, db_emails: set) -> dict:
+    """
+    Fast regex classification for bounce and out-of-office notifications.
+    Matches extracted recipient emails directly against DB recipient set in O(1) time.
+    """
+    sender_lower = sender.lower()
+    subject_lower = subject.lower()
+    body_lower = body.lower()
+
+    # 1. Check for hard bounce
+    is_bounce_sender = "mailer-daemon" in sender_lower or "postmaster" in sender_lower
+    is_bounce_subject = any(k in subject_lower for k in [
+        "delivery status notification", "undeliverable", "delivery failure",
+        "failure notice", "mail delivery failed", "returned to sender", "bounce"
+    ])
+    is_bounce_body = any(k in body_lower for k in [
+        "550 5.1.1", "user unknown", "does not exist", "account not found",
+        "invalid address", "mailbox unavailable", "address rejected", "diagnostic-code: smtp; 550"
+    ])
+
+    if is_bounce_sender or is_bounce_subject or is_bounce_body:
+        found_emails = re.findall(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', body)
+        for addr in set(found_emails):
+            addr_clean = addr.lower().strip()
+            if addr_clean in db_emails:
+                return {
+                    "type": "hard_bounce",
+                    "failed_email": addr_clean,
+                    "confidence": 0.95,
+                    "reason": "Matched delivery failure notification for recipient"
+                }
+
+    # 2. Check for out of office
+    is_ooo_subject = any(k in subject_lower for k in [
+        "out of office", "auto-reply", "auto reply", "away from office", "on leave", "vacation reply"
+    ])
+    if is_ooo_subject:
+        sender_match = re.search(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}', sender)
+        ooo_sender = sender_match.group(0).lower() if sender_match else None
+        if ooo_sender and ooo_sender in db_emails:
+            return {
+                "type": "out_of_office",
+                "ooo_sender_email": ooo_sender,
+                "return_date": None,
+                "confidence": 0.90,
+                "reason": "Matched auto-reply out of office email"
+            }
+
+    return {"type": "irrelevant", "confidence": 0.0, "reason": "No fast pattern match"}
+
+
 def run_inbox_monitor(config: dict, db_conn) -> dict:
     """
     Full inbox monitoring pipeline:
     1. Connect to Gmail via IMAP
     2. Search inbox + All Mail for bounces and OOO replies
-    3. Classify each email with Groq
+    3. Classify each email with fast regex + Groq fallback
     4. Match to recipients in DB
     5. Apply status updates
     6. Return a summary of what was found and updated
-
-    Returns:
-    {
-      "bounces_detected": int,
-      "ooo_detected": int,
-      "updated": int,
-      "skipped": int,  (classified but no matching recipient found)
-      "errors": int,
-      "details": [ list of action dicts ]
-    }
     """
     gmail_address = config.get("gmail_address")
     app_password = config.get("gmail_app_password")
@@ -252,6 +300,7 @@ def run_inbox_monitor(config: dict, db_conn) -> dict:
         summary["error"] = f"IMAP connection failed: {str(e)}"
         return summary
 
+    db_emails = get_all_db_emails(db_conn)
     seen_emails = set()  # avoid processing same address twice
 
     for item in emails:
@@ -270,7 +319,13 @@ def run_inbox_monitor(config: dict, db_conn) -> dict:
                     subject += str(part)
 
             body = extract_body(msg)
-            classification = classify_email_with_groq(groq_api_key, sender, subject, body)
+
+            # Fast regex pre-classification
+            classification = classify_email_fast(sender, subject, body, db_emails)
+            if classification["type"] == "irrelevant":
+                # Fallback to Groq only if regex did not match
+                if "mailer-daemon" in sender.lower() or "postmaster" in sender.lower() or "out of office" in subject.lower() or "auto-reply" in subject.lower():
+                    classification = classify_email_with_groq(groq_api_key, sender, subject, body)
 
             if classification["type"] == "hard_bounce" and classification.get("confidence", 0) >= 0.75:
                 failed_email = classification.get("failed_email")

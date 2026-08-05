@@ -10,7 +10,32 @@ export default function Dashboard() {
   const [checking, setChecking] = useState(false)
   const [monitorResult, setMonitorResult] = useState(null)
 
-  useEffect(() => {
+  const startPollingStatus = useCallback(() => {
+    setChecking(true);
+    const interval = setInterval(async () => {
+      try {
+        const res = await api.get('/inbox/status');
+        setMonitorResult(res.data);
+        if (res.data.status !== 'running') {
+          clearInterval(interval);
+          setChecking(false);
+          // Refresh stats after monitor finishes
+          Promise.all([
+            api.get('/dashboard'),
+            api.get('/dashboard/reply-stats')
+          ]).then(([dashRes, replyRes]) => {
+            setStats(dashRes.data.stats);
+            setReplyStats(replyRes.data);
+          }).catch(console.error);
+        }
+      } catch {
+        clearInterval(interval);
+        setChecking(false);
+      }
+    }, 2000);
+  }, []);
+
+  const fetchDashboardData = useCallback(() => {
     Promise.all([
       api.get('/dashboard'),
       api.get('/dashboard/reply-stats'),
@@ -21,20 +46,32 @@ export default function Dashboard() {
         setRecent(dashRes.data.recent_campaigns)
         setReplyStats(replyRes.data)
         setMonitorResult(inboxRes.data)
+        if (inboxRes.data?.status === 'running') {
+          startPollingStatus();
+        }
       })
       .catch(console.error)
       .finally(() => setLoading(false))
-  }, [])
+  }, [startPollingStatus])
+
+  useEffect(() => {
+    fetchDashboardData()
+  }, [fetchDashboardData])
 
   const handleCheckNow = async () => {
     setChecking(true);
     try {
-      const res = await api.post('/inbox/check', {}, { timeout: 120000 });
+      const res = await api.post('/inbox/check');
       setMonitorResult(res.data);
+      startPollingStatus();
     } catch (err) {
-      setMonitorResult({ error: "Check failed. See console for details." });
-    } finally {
-      setChecking(false);
+      if (err.response?.status === 429) {
+        // Monitor is already running in background, poll for results
+        startPollingStatus();
+      } else {
+        setMonitorResult({ error: err.response?.data?.error || "Check failed." });
+        setChecking(false);
+      }
     }
   };
 

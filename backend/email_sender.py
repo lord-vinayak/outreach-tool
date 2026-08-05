@@ -4,6 +4,7 @@ Supports plain text emails with PDF attachment and thread continuity headers.
 """
 
 import smtplib
+import socket
 import os
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
@@ -13,6 +14,22 @@ from email.utils import make_msgid, formatdate
 
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587  # TLS
+
+
+def _connect_smtp(host=SMTP_HOST, port=SMTP_PORT, timeout=30):
+    """
+    Connect to Gmail SMTP server. Fallbacks to IPv4 explicitly if IPv6
+    returns network unreachable (Errno 101).
+    """
+    try:
+        return smtplib.SMTP(host, port, timeout=timeout)
+    except OSError as e:
+        if getattr(e, 'errno', None) == 101 or "unreachable" in str(e).lower():
+            infos = socket.getaddrinfo(host, port, socket.AF_INET, socket.SOCK_STREAM)
+            if infos:
+                ipv4_ip = infos[0][4][0]
+                return smtplib.SMTP(ipv4_ip, port, timeout=timeout)
+        raise
 
 
 def send_email(
@@ -71,9 +88,10 @@ def send_email(
             )
             msg.attach(part)
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+    with _connect_smtp(SMTP_HOST, SMTP_PORT) as server:
         server.starttls()
         server.login(sender_email, app_password)
         server.sendmail(sender_email, recipient_email, msg.as_string())
 
     return message_id
+
