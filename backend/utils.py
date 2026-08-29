@@ -132,8 +132,10 @@ ANGLE_BRACKET_PATTERN = re.compile(
 )
 
 # Pattern: Name - email
+# Requires whitespace around the dash so hyphenated local-parts (no-reply@x.com,
+# jane-doe@x.com) aren't misread as "name - email" and split apart.
 DASH_PATTERN = re.compile(
-    r"(.+?)\s*-\s*([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})"
+    r"(.+?)\s+-\s+([a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,})"
 )
 
 
