@@ -57,6 +57,7 @@ send_progress = {}
 _send_progress_lock = threading.Lock()
 
 generation_progress = {}
+_generation_progress_lock = threading.Lock()
 # Structure per campaign_id:
 # {
 #   "total": 10,
@@ -364,22 +365,26 @@ def generate_campaign_emails(campaign_id):
     if not campaign:
         return jsonify({"error": "Campaign not found"}), 404
     
-    recipients = query_db(
-        "SELECT * FROM recipients WHERE campaign_id = ? AND status = 'draft'",
-        (campaign_id,)
-    )
-    if not recipients:
-        return jsonify({"error": "No draft recipients to generate emails for"}), 400
-    
-    # Initialize progress
-    generation_progress[campaign_id] = {
-        "total": len(recipients),
-        "completed": 0,
-        "failed": 0,
-        "status": "generating",
-        "errors": []
-    }
-    
+    with _generation_progress_lock:
+        if generation_progress.get(campaign_id, {}).get("status") == "generating":
+            return jsonify({"error": "Generation is already in progress for this campaign."}), 409
+
+        recipients = query_db(
+            "SELECT * FROM recipients WHERE campaign_id = ? AND status = 'draft'",
+            (campaign_id,)
+        )
+        if not recipients:
+            return jsonify({"error": "No draft recipients to generate emails for"}), 400
+
+        # Initialize progress
+        generation_progress[campaign_id] = {
+            "total": len(recipients),
+            "completed": 0,
+            "failed": 0,
+            "status": "generating",
+            "errors": []
+        }
+
     # Build round-robin cycle from all available keys
     key_cycle = get_groq_key_cycle(config)
     
@@ -451,8 +456,12 @@ def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume
                     progress["completed"] += 1
         finally:
             conn.close()
-    
-    if progress["status"] != "error":
+
+    if progress["status"] == "error":
+        pass
+    elif progress["completed"] == 0 and progress["failed"] > 0:
+        progress["status"] = "error"
+    else:
         progress["status"] = "complete"
 
 @app.route("/api/campaign/<int:campaign_id>/generate-progress", methods=["GET"])
@@ -767,28 +776,33 @@ def generate_followups(campaign_id):
     global_context = data.get("global_context", "")
     recipient_ids = data.get("recipient_ids")
 
-    base_query = """
-        SELECT * FROM recipients 
-        WHERE campaign_id = ? AND status = 'sent' AND follow_up_sent = 0
-        AND exclude_followup = 0 
-        AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
-    """
-    
-    recipients = query_db(base_query, (campaign_id,))
-    if recipient_ids:
-        recipients = [r for r in recipients if r["id"] in recipient_ids]
-
-    if not recipients:
-        return jsonify({"error": "No recipients eligible for follow-up"}), 400
-
     progress_key = f"{campaign_id}_followup"
-    generation_progress[progress_key] = {
-        "total": len(recipients),
-        "completed": 0,
-        "failed": 0,
-        "status": "generating",
-        "errors": []
-    }
+
+    with _generation_progress_lock:
+        if generation_progress.get(progress_key, {}).get("status") == "generating":
+            return jsonify({"error": "Follow-up generation is already in progress for this campaign."}), 409
+
+        base_query = """
+            SELECT * FROM recipients
+            WHERE campaign_id = ? AND status = 'sent' AND follow_up_sent = 0
+            AND exclude_followup = 0
+            AND reply_status NOT IN ('invalid_email', 'interview_scheduled', 'final_rejection', 'interested')
+        """
+
+        recipients = query_db(base_query, (campaign_id,))
+        if recipient_ids:
+            recipients = [r for r in recipients if r["id"] in recipient_ids]
+
+        if not recipients:
+            return jsonify({"error": "No recipients eligible for follow-up"}), 400
+
+        generation_progress[progress_key] = {
+            "total": len(recipients),
+            "completed": 0,
+            "failed": 0,
+            "status": "generating",
+            "errors": []
+        }
 
     key_cycle = get_groq_key_cycle(config)
     profile = config.get("profile", {})
@@ -856,8 +870,12 @@ def _generate_followups_parallel(campaign_id, recipients, profile, resume_parsed
                     progress["completed"] += 1
         finally:
             conn.close()
-    
-    if progress["status"] != "error":
+
+    if progress["status"] == "error":
+        pass
+    elif progress["completed"] == 0 and progress["failed"] > 0:
+        progress["status"] = "error"
+    else:
         progress["status"] = "complete"
 
 @app.route("/api/campaign/<int:campaign_id>/generate-followup-progress", methods=["GET"])

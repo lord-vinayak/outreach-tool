@@ -10,8 +10,6 @@ import time
 from groq import Groq
 from utils import resolve_company_name
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
-
 SYSTEM_PROMPT = """You are helping a college student write personalised cold outreach emails for internship/job opportunities.
 These emails will be sent directly from the student's Gmail. They must feel like real, human-written emails — not templates, not cover letters, not LinkedIn messages.
 
@@ -351,7 +349,7 @@ TONE & INTENT:
 TONE: Semi-formal, brief, warm. 80 to 120 words.{reply_section}"""
 
 
-def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama/llama-4-scout-17b-16e-instruct"):
+def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt-oss-20b"):
     """
     Call the Groq API and parse the JSON response.
     Retries on rate limits or service unavailable.
@@ -371,6 +369,7 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
                     {"role": "user", "content": user_prompt + seed_note}
                 ],
                 temperature=0.9,
+                max_completion_tokens=8000,
                 response_format={"type": "json_object"}
             )
 
@@ -391,10 +390,8 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
         except Exception as e:
             err_str = str(e).upper()
             FALLBACK_MODELS = [
-                "meta-llama/llama-4-scout-17b-16e-instruct",
-                "openai/gpt-oss-120b",
-                "qwen/qwen3-32b",
                 "openai/gpt-oss-20b",
+                "openai/gpt-oss-120b",
             ]
 
             if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
