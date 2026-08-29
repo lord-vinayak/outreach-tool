@@ -25,7 +25,7 @@ def resolve_company_name(domain: str, groq_api_key: str) -> str:
     try:
         client = Groq(api_key=groq_api_key)
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",
+            model="openai/gpt-oss-20b",
             messages=[
                 {
                     "role": "system",
@@ -87,7 +87,7 @@ def resolve_company_name(domain: str, groq_api_key: str) -> str:
         # Step 2: Ask Groq to extract the real company name
         client = Groq(api_key=groq_api_key)
         response = client.chat.completions.create(
-            model="llama-3.1-8b-instant",  # use fast/cheap model for this simple task
+            model="openai/gpt-oss-20b",  # use fast/cheap model for this simple task
             messages=[
                 {
                     "role": "system",

@@ -394,7 +394,7 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.3-70b-versatile",
     "qwen/qwen3-32b",
-    "llama-3.1-8b-instant",
+    "openai/gpt-oss-20b",
 ]
 
         if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:

@@ -6,7 +6,7 @@ from email.header import decode_header
 from datetime import datetime, timezone
 from groq import Groq
 
-GROQ_MODEL = "llama-3.1-8b-instant"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 def get_imap_connection(gmail_address: str, app_password: str) -> imaplib.IMAP4_SSL:
     """Connect to Gmail via IMAP using App Password."""
