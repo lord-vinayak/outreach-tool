@@ -391,31 +391,31 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
         except Exception as e:
             err_str = str(e).upper()
             FALLBACK_MODELS = [
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.3-70b-versatile",
-    "qwen/qwen3-32b",
-    "openai/gpt-oss-20b",
-]
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+                "llama-3.3-70b-versatile",
+                "qwen/qwen3-32b",
+                "openai/gpt-oss-20b",
+            ]
 
-        if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
-            try:
-                current_index = FALLBACK_MODELS.index(model)
-            except ValueError:
-                current_index = -1
+            if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
+                try:
+                    current_index = FALLBACK_MODELS.index(model)
+                except ValueError:
+                    current_index = -1
 
-            if current_index < len(FALLBACK_MODELS) - 1:
-                next_model = FALLBACK_MODELS[current_index + 1]
-                print(f"Rate limit hit on {model}. Trying next model: {next_model}...")
-                return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
+                if current_index < len(FALLBACK_MODELS) - 1:
+                    next_model = FALLBACK_MODELS[current_index + 1]
+                    print(f"Rate limit hit on {model}. Trying next model: {next_model}...")
+                    return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
 
-            raise Exception(f"All models exhausted due to rate limits. Try again later.")
-                
-            if "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+                raise Exception(f"All models exhausted due to rate limits. Try again later.")
+
+            elif "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
                 last_error = e
                 wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
                 print(f"Groq API error ({e}) on model {model} — retrying in {wait}s (attempt {attempt+1}/{retries})")
                 time.sleep(wait)
             else:
-                 raise Exception(f"Groq API error: {e}")
+                raise Exception(f"Groq API error: {e}")
 
     raise Exception(f"Groq API unavailable/failed after {retries} retries. Last error: {last_error}")
