@@ -1,4 +1,4 @@
-export default function ConfirmModal({ isOpen, title, message, onConfirm, onCancel }) {
+export default function ConfirmModal({ isOpen, title, message, onConfirm, onCancel, confirming = false }) {
   if (!isOpen) return null
 
   return (
@@ -27,9 +27,10 @@ export default function ConfirmModal({ isOpen, title, message, onConfirm, onCanc
           <button
             id="confirm-modal-confirm"
             onClick={onConfirm}
-            className="px-6 py-2.5 text-[10px] font-mono uppercase tracking-widest text-white bg-indigo-700 rounded-none hover:bg-indigo-800 transition-colors"
+            disabled={confirming}
+            className="px-6 py-2.5 text-[10px] font-mono uppercase tracking-widest text-white bg-indigo-700 rounded-none hover:bg-indigo-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
-            Confirm
+            {confirming ? 'Sending...' : 'Confirm'}
           </button>
         </div>
       </div>

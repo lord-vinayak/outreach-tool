@@ -10,6 +10,7 @@ export default function Preview({ isFollowUp = false }) {
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
   const [showConfirm, setShowConfirm] = useState(false)
+  const [sending, setSending] = useState(false)
   const [regenerating, setRegenerating] = useState({})
   const [error, setError] = useState('')
   const [blockedDomains, setBlockedDomains] = useState([])
@@ -117,23 +118,23 @@ export default function Preview({ isFollowUp = false }) {
   }
 
   const confirmSend = async () => {
+    if (sending) return
+    setSending(true)
     setShowConfirm(false)
 
-    // Save any pending edits first
-    await Promise.all(items.map((item, i) => saveEdit(item, i)))
-
     try {
+      // Save any pending edits first
+      await Promise.all(items.map((item, i) => saveEdit(item, i)))
+
       const url = isFollowUp
         ? `/campaign/${campaignId}/followup/send`
         : `/campaign/${campaignId}/send`
       await api.post(url)
 
-      const sendPath = isFollowUp
-        ? `/campaign/${campaignId}/followup/send`
-        : `/campaign/${campaignId}/send`
-      navigate(sendPath)
+      navigate(url)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to start sending')
+      setSending(false)
     }
   }
 
@@ -189,7 +190,7 @@ export default function Preview({ isFollowUp = false }) {
         <button
           id="send-all-top-btn"
           onClick={handleSendAll}
-          disabled={items.length === 0 || sendableCount === 0}
+          disabled={items.length === 0 || sendableCount === 0 || sending}
           className="px-6 py-2.5 bg-indigo-700 text-white font-display font-bold text-xs rounded-none hover:bg-indigo-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors uppercase tracking-widest"
         >
           {sendableCount > 0 ? `Send ${sendableCount} Email${sendableCount !== 1 ? 's' : ''}` : 'No Emails to Send'}
@@ -290,7 +291,7 @@ export default function Preview({ isFollowUp = false }) {
         <button
           id="send-all-bottom-btn"
           onClick={handleSendAll}
-          disabled={items.length === 0 || sendableCount === 0}
+          disabled={items.length === 0 || sendableCount === 0 || sending}
           className="w-full sm:w-auto px-8 py-3.5 bg-indigo-700 text-white font-display font-bold text-sm rounded-none hover:bg-indigo-800 disabled:bg-zinc-300 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors uppercase tracking-widest"
         >
           {sendableCount > 0 ? `Send ${sendableCount} Email${sendableCount !== 1 ? 's' : ''}` : 'No Emails to Send'}
@@ -303,6 +304,7 @@ export default function Preview({ isFollowUp = false }) {
         message={`You are about to send ${items.length} email${items.length !== 1 ? 's' : ''}. This cannot be undone. Proceed?`}
         onConfirm={confirmSend}
         onCancel={() => setShowConfirm(false)}
+        confirming={sending}
       />
     </div>
   )

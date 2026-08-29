@@ -54,6 +54,7 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # In-memory progress tracking for send jobs
 send_progress = {}
+_send_progress_lock = threading.Lock()
 
 generation_progress = {}
 # Structure per campaign_id:
@@ -638,26 +639,30 @@ def send_campaign(campaign_id):
     if not os.path.exists(resume_path):
         return jsonify({"error": "Resume PDF not found. Upload it in Profile."}), 400
 
-    recipients = query_db("""
-        SELECT * FROM recipients
-        WHERE campaign_id = ?
-          AND status = 'draft'
-          AND subject IS NOT NULL
-          AND LOWER(SUBSTR(email, INSTR(email, '@') + 1)) NOT IN (
-              SELECT domain FROM blocked_domains
-          )
-    """, (campaign_id,))
-    if not recipients:
-        return jsonify({"error": "No emails ready to send"}), 400
+    with _send_progress_lock:
+        if send_progress.get(campaign_id, {}).get("status") == "sending":
+            return jsonify({"error": "Sending is already in progress for this campaign."}), 409
 
-    # Initialize progress tracking
-    send_progress[campaign_id] = {
-        "current": 0,
-        "total": len(recipients),
-        "status": "sending",
-        "log": [],
-        "current_email": "",
-    }
+        recipients = query_db("""
+            SELECT * FROM recipients
+            WHERE campaign_id = ?
+              AND status = 'draft'
+              AND subject IS NOT NULL
+              AND LOWER(SUBSTR(email, INSTR(email, '@') + 1)) NOT IN (
+                  SELECT domain FROM blocked_domains
+              )
+        """, (campaign_id,))
+        if not recipients:
+            return jsonify({"error": "No emails ready to send"}), 400
+
+        # Initialize progress tracking
+        send_progress[campaign_id] = {
+            "current": 0,
+            "total": len(recipients),
+            "status": "sending",
+            "log": [],
+            "current_email": "",
+        }
 
     # Start background thread
     thread = threading.Thread(
@@ -960,30 +965,35 @@ def send_followups(campaign_id):
     if not os.path.exists(resume_path):
         return jsonify({"error": "Resume PDF not found"}), 400
 
-    followups = query_db("""
-        SELECT f.*, r.email as recipient_email, r.name as recipient_name,
-               r.message_id as original_message_id, r.id as rid
-        FROM followups f
-        JOIN recipients r ON r.id = f.recipient_id
-        WHERE r.campaign_id = ? AND f.status = 'draft'
-          AND LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1)) NOT IN (
-              SELECT domain FROM blocked_domains
-          )
-        ORDER BY f.id
-    """, (campaign_id,))
-
-    if not followups:
-        return jsonify({"error": "No follow-ups ready to send"}), 400
-
     # Use a separate progress key for follow-ups
     progress_key = f"{campaign_id}_followup"
-    send_progress[progress_key] = {
-        "current": 0,
-        "total": len(followups),
-        "status": "sending",
-        "log": [],
-        "current_email": "",
-    }
+
+    with _send_progress_lock:
+        if send_progress.get(progress_key, {}).get("status") == "sending":
+            return jsonify({"error": "Follow-up sending is already in progress for this campaign."}), 409
+
+        followups = query_db("""
+            SELECT f.*, r.email as recipient_email, r.name as recipient_name,
+                   r.message_id as original_message_id, r.id as rid
+            FROM followups f
+            JOIN recipients r ON r.id = f.recipient_id
+            WHERE r.campaign_id = ? AND f.status = 'draft'
+              AND LOWER(SUBSTR(r.email, INSTR(r.email, '@') + 1)) NOT IN (
+                  SELECT domain FROM blocked_domains
+              )
+            ORDER BY f.id
+        """, (campaign_id,))
+
+        if not followups:
+            return jsonify({"error": "No follow-ups ready to send"}), 400
+
+        send_progress[progress_key] = {
+            "current": 0,
+            "total": len(followups),
+            "status": "sending",
+            "log": [],
+            "current_email": "",
+        }
 
     thread = threading.Thread(
         target=_send_followup_thread,
