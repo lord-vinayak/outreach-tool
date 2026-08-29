@@ -2,7 +2,7 @@ import json
 import pdfplumber
 from groq import Groq
 
-GROQ_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODEL = "openai/gpt-oss-20b"
 
 def extract_text_from_pdf(pdf_path: str) -> str:
     """Extract all text from the resume PDF."""

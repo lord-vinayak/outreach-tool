@@ -392,7 +392,7 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="meta-llama
             err_str = str(e).upper()
             FALLBACK_MODELS = [
                 "meta-llama/llama-4-scout-17b-16e-instruct",
-                "llama-3.3-70b-versatile",
+                "openai/gpt-oss-120b",
                 "qwen/qwen3-32b",
                 "openai/gpt-oss-20b",
             ]
