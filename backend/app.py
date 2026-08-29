@@ -516,11 +516,18 @@ def update_recipient(campaign_id, recipient_id):
 @app.route("/api/recipient/<int:recipient_id>/status", methods=["PATCH"])
 def update_recipient_status(recipient_id):
     data = request.json or {}
-    reply_status = data.get("reply_status", "no_reply")
-    reply_content = data.get("reply_content")
-    check_back_date = data.get("check_back_date")
-    exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection" ] else data.get("exclude_followup", 0)
-    
+
+    existing = query_db("SELECT * FROM recipients WHERE id = ?", (recipient_id,), one=True)
+    if not existing:
+        return jsonify({"error": "Recipient not found"}), 404
+
+    # Only overwrite fields explicitly present in the request — callers that
+    # only manage a subset of these fields must not wipe out the others.
+    reply_status = data.get("reply_status", existing["reply_status"] or "no_reply")
+    reply_content = data.get("reply_content", existing["reply_content"])
+    check_back_date = data.get("check_back_date", existing["check_back_date"])
+    exclude_followup = 1 if reply_status in ["invalid_email", "interview_scheduled", "final_rejection"] else data.get("exclude_followup", existing["exclude_followup"])
+
     conn = get_db()
     conn.execute(
         "UPDATE recipients SET reply_status = ?, reply_content = ?, check_back_date = ?, exclude_followup = ?, status_updated_at = ? WHERE id = ?",
