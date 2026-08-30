@@ -21,6 +21,7 @@ export default function CampaignDetail() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [followupContext, setFollowupContext] = useState('')
+  const [followupProvider, setFollowupProvider] = useState('groq')
   const [generationProgress, setGenerationProgress] = useState(null)
   const [expanded, setExpanded] = useState({})
   const [replyExpanded, setReplyExpanded] = useState({})
@@ -67,7 +68,8 @@ export default function CampaignDetail() {
     try {
       const res = await api.post(`/campaign/${campaignId}/generate-followups`, {
         global_context: followupContext,
-        recipient_ids: eligibleRecipients.map(r => r.id)
+        recipient_ids: eligibleRecipients.map(r => r.id),
+        provider: followupProvider
       })
       setGenerationProgress(prev => ({ ...prev, total: res.data.total }))
 
@@ -188,6 +190,15 @@ export default function CampaignDetail() {
               placeholder="Any additional context for this follow-up batch? (optional)"
               className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm mb-3 focus:ring-1 focus:ring-zinc-900 outline-none bg-white font-mono placeholder-zinc-400"
             />
+            <select
+              value={followupProvider}
+              onChange={(e) => setFollowupProvider(e.target.value)}
+              className="w-full border border-zinc-300 rounded-none px-3 py-2 text-sm mb-3 focus:ring-1 focus:ring-zinc-900 outline-none bg-white"
+            >
+              <option value="groq">Groq (free, slower)</option>
+              <option value="openai">OpenAI (paid, fast)</option>
+              <option value="anthropic">Anthropic (paid, fast)</option>
+            </select>
             {generationProgress ? (
               <div className="generation-progress-box border border-amber-200 rounded-lg p-5 mt-2 bg-white shadow-sm text-left">
                 <div className="flex justify-between items-center mb-3">

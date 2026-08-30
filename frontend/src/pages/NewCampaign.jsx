@@ -11,6 +11,7 @@ export default function NewCampaign() {
     goal: '',
     additional_context: '',
   })
+  const [provider, setProvider] = useState('groq')
   const [parsedCount, setParsedCount] = useState(null)
   const [loading, setLoading] = useState(false)
   const [generationProgress, setGenerationProgress] = useState(null)
@@ -143,7 +144,7 @@ export default function NewCampaign() {
 
       // Step 2: Generate emails
       setGenerationProgress({ total: recipients_count, completed: 0, failed: 0, status: "generating", errors: [] })
-      const genRes = await api.post(`/campaign/${campaign_id}/generate`)
+      const genRes = await api.post(`/campaign/${campaign_id}/generate`, { provider })
       setGenerationProgress(prev => ({ ...prev, total: genRes.data.total }))
 
       const interval = setInterval(async () => {
@@ -350,6 +351,26 @@ export default function NewCampaign() {
             placeholder="e.g., Mention that I'm available from May to July 2026"
             className="w-full border border-zinc-300 rounded-none px-4 py-3 text-sm leading-relaxed focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none placeholder-zinc-400 bg-zinc-50 focus:bg-white transition-colors"
           />
+        </div>
+
+        {/* Model Provider */}
+        <div>
+          <label className="block text-xs font-display font-bold text-zinc-950 uppercase tracking-widest mb-2">
+            Model Provider
+          </label>
+          <select
+            id="provider-select"
+            value={provider}
+            onChange={(e) => setProvider(e.target.value)}
+            className="w-full border border-zinc-300 rounded-none px-4 py-2.5 text-sm focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none bg-zinc-50 focus:bg-white transition-colors"
+          >
+            <option value="groq">Groq (free, slower)</option>
+            <option value="openai">OpenAI (paid, fast)</option>
+            <option value="anthropic">Anthropic (paid, fast)</option>
+          </select>
+          <p className="mt-2 text-[11px] font-mono text-zinc-500">
+            Company-name lookups always use Groq regardless of this choice.
+          </p>
         </div>
 
         <div className="pt-4 border-t border-zinc-200">

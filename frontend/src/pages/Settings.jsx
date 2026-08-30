@@ -8,10 +8,14 @@ export default function Settings() {
     groq_api_key: '',
     groq_api_key_2: '',
     groq_api_key_3: '',
+    openai_api_key: '',
+    anthropic_api_key: '',
     send_delay_seconds: 60,
   })
   const [hasPassword, setHasPassword] = useState(false)
   const [hasKey, setHasKey] = useState(false)
+  const [hasOpenAIKey, setHasOpenAIKey] = useState(false)
+  const [hasAnthropicKey, setHasAnthropicKey] = useState(false)
   const [flash, setFlash] = useState('')
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
@@ -28,6 +32,8 @@ export default function Settings() {
         }))
         setHasPassword(res.data.has_gmail_password)
         setHasKey(res.data.has_groq_key)
+        setHasOpenAIKey(res.data.has_openai_key)
+        setHasAnthropicKey(res.data.has_anthropic_key)
       })
       .catch(console.error)
   }, [])
@@ -51,6 +57,8 @@ export default function Settings() {
       setFlash('Settings saved successfully!')
       if (form.gmail_app_password) setHasPassword(true)
       if (form.groq_api_key) setHasKey(true)
+      if (form.openai_api_key) setHasOpenAIKey(true)
+      if (form.anthropic_api_key) setHasAnthropicKey(true)
       setTimeout(() => setFlash(''), 3000)
     } catch (err) {
       setError(err.response?.data?.error || 'Failed to save settings')
@@ -175,10 +183,57 @@ export default function Settings() {
         </div>
 
         <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-1">
-          💡 Adding multiple Groq keys enables round-robin rotation — 
-          this multiplies your effective rate limit. 
+          💡 Adding multiple Groq keys enables round-robin rotation —
+          this multiplies your effective rate limit.
           Get free keys at <a href="https://console.groq.com" target="_blank" rel="noopener noreferrer" className="underline">console.groq.com</a>.
           Only Key 1 is required.
+        </div>
+
+        {/* OpenAI API Key */}
+        <div>
+          <label htmlFor="openai-key" className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            OpenAI API Key
+            {hasOpenAIKey ? (
+              <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 inline-block">✓ CONFIGURED</span>
+            ) : (
+              <span className="text-[10px] text-zinc-400 font-normal lowercase tracking-normal">optional — for faster generation</span>
+            )}
+          </label>
+          <input
+            id="openai-key"
+            type="password"
+            name="openai_api_key"
+            value={form.openai_api_key}
+            onChange={handleChange}
+            placeholder={hasOpenAIKey ? '••••••••••••••••' : 'sk-... (optional)'}
+            className="w-full border border-zinc-300 bg-zinc-50 rounded-none px-4 py-3 font-mono text-sm focus:bg-white focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none transition-colors"
+          />
+        </div>
+
+        {/* Anthropic API Key */}
+        <div>
+          <label htmlFor="anthropic-key" className="block text-[10px] font-display font-bold text-zinc-950 uppercase tracking-widest mb-2 flex items-center justify-between">
+            Anthropic API Key
+            {hasAnthropicKey ? (
+              <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 inline-block">✓ CONFIGURED</span>
+            ) : (
+              <span className="text-[10px] text-zinc-400 font-normal lowercase tracking-normal">optional — for faster generation</span>
+            )}
+          </label>
+          <input
+            id="anthropic-key"
+            type="password"
+            name="anthropic_api_key"
+            value={form.anthropic_api_key}
+            onChange={handleChange}
+            placeholder={hasAnthropicKey ? '••••••••••••••••' : 'sk-ant-... (optional)'}
+            className="w-full border border-zinc-300 bg-zinc-50 rounded-none px-4 py-3 font-mono text-sm focus:bg-white focus:ring-1 focus:ring-zinc-900 focus:border-zinc-900 outline-none transition-colors"
+          />
+        </div>
+
+        <div className="text-xs text-blue-600 bg-blue-50 border border-blue-200 rounded px-3 py-2 mt-1">
+          💡 Company-name lookups always use Groq, even when generating emails with OpenAI or Anthropic —
+          your paid keys are only billed for the email body itself.
         </div>
 
         {/* Send Delay */}
