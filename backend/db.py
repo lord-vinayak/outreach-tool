@@ -47,6 +47,18 @@ def migrate_blocked_domains_table(conn):
     conn.commit()
 
 
+def migrate_company_name_cache_table(conn):
+    """Safe migration: create company_name_cache table if it doesn't exist."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS company_name_cache (
+            domain TEXT PRIMARY KEY,
+            company_name TEXT NOT NULL,
+            resolved_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+
+
 def init_db():
     """Create tables if they don't exist."""
     conn = get_db()
@@ -99,6 +111,7 @@ def init_db():
     conn.commit()
     
     migrate_blocked_domains_table(conn)
+    migrate_company_name_cache_table(conn)
     conn.close()
 
 
