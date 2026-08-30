@@ -8,7 +8,9 @@ import json
 import random
 import time
 from groq import Groq
-from utils import resolve_company_name
+from openai import OpenAI
+import anthropic
+from utils import resolve_company_name, get_groq_rate_limiter
 
 SYSTEM_PROMPT = """You are helping a college student write personalised cold outreach emails for internship/job opportunities.
 These emails will be sent directly from the student's Gmail. They must feel like real, human-written emails — not templates, not cover letters, not LinkedIn messages.
@@ -112,14 +114,17 @@ Do NOT default to the first project listed. Actively reason about fit.""")
     return "\n".join(lines) if lines else "No structured resume data extracted."
 
 
-def generate_email(profile, recipient, campaign_goal, additional_context, api_key, resume_parsed=None):
+def generate_email(profile, recipient, campaign_goal, additional_context, api_key,
+                    resume_parsed=None, provider="groq", groq_api_key=None):
     """
     Generate a unique cold outreach email for a single recipient.
+    `api_key` is the key for `provider` (the model writing the email); company-name
+    resolution always uses `groq_api_key` (falls back to `api_key` when provider is groq).
     """
     domain = recipient["email"].split("@")[1]
-    company = resolve_company_name(domain, api_key)
+    company = resolve_company_name(domain, groq_api_key or api_key, min_interval_seconds=8 if provider == "groq" else 2)
     recipient_name = recipient.get("name") or "address them naturally without a explicit name if unknown"
-    
+
     resume_block = build_resume_highlights(resume_parsed) if resume_parsed else "Not available."
 
     user_prompt = f"""Generate a cold outreach email from the following student to the recipient at {company}.
@@ -169,7 +174,7 @@ Best,
 
 Return ONLY valid JSON: {{"subject": "...", "body": "..."}}"""
 
-    return _call_groq(SYSTEM_PROMPT, user_prompt, api_key)
+    return _call_provider(provider, SYSTEM_PROMPT, user_prompt, api_key)
 
 
 def generate_followup(profile, original_subject, original_body, followup_context, api_key, resume_parsed=None):
@@ -217,14 +222,17 @@ def generate_contextual_followup(profile, original_subject, original_body,
                                   recipient_email, recipient_name,
                                   reply_status, reply_content,
                                   check_back_date, global_context,
-                                  api_key, resume_parsed=None):
+                                  api_key, resume_parsed=None,
+                                  provider="groq", groq_api_key=None):
     """
     Generate a context-aware follow-up email based on the recipient's reply status.
     Each status produces a fundamentally different tone and intent.
+    `api_key` is the key for `provider`; company-name resolution always uses
+    `groq_api_key` (falls back to `api_key` when provider is groq).
     """
 
     domain = recipient_email.split("@")[1]
-    company = resolve_company_name(domain, api_key)
+    company = resolve_company_name(domain, groq_api_key or api_key, min_interval_seconds=8 if provider == "groq" else 2)
     first_name = profile.get('name', '').split()[0] if profile.get('name') else 'Student'
 
     greeting = f"Hi {recipient_name.split()[0].capitalize()}," if recipient_name else "Hi there,"
@@ -285,7 +293,7 @@ Best,
 
 Return ONLY valid JSON: {{"subject": "Re: {original_subject}", "body": "..."}}"""
 
-    return _call_groq(system_prompt, user_prompt, api_key)
+    return _call_provider(provider, system_prompt, user_prompt, api_key)
 
 
 def _build_status_instructions(reply_status, reply_content, check_back_date, company):
@@ -362,6 +370,7 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt
             # Add random seed variation for uniqueness
             seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
 
+            get_groq_rate_limiter(api_key).wait()
             response = client.chat.completions.create(
                 model=model,
                 messages=[
@@ -370,6 +379,7 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt
                 ],
                 temperature=0.9,
                 max_completion_tokens=8000,
+                reasoning_effort="low",
                 response_format={"type": "json_object"}
             )
 
@@ -394,7 +404,8 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt
                 "openai/gpt-oss-120b",
             ]
 
-            if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str or "TOKENS PER MINUTE" in err_str:
+            # Daily/request-per-day limits won't clear within this run — switch model instead of waiting.
+            if "TOKENS PER DAY" in err_str or "REQUESTS PER DAY" in err_str:
                 try:
                     current_index = FALLBACK_MODELS.index(model)
                 except ValueError:
@@ -402,12 +413,14 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt
 
                 if current_index < len(FALLBACK_MODELS) - 1:
                     next_model = FALLBACK_MODELS[current_index + 1]
-                    print(f"Rate limit hit on {model}. Trying next model: {next_model}...")
+                    print(f"Daily limit hit on {model}. Trying next model: {next_model}...")
                     return _call_groq(system_prompt, user_prompt, api_key, retries, model=next_model)
 
-                raise Exception(f"All models exhausted due to rate limits. Try again later.")
+                raise Exception(f"All models exhausted due to daily rate limits. Try again tomorrow.")
 
-            elif "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+            # Per-minute limits and other transient errors clear on their own — back off and retry.
+            elif ("TOKENS PER MINUTE" in err_str or "REQUESTS PER MINUTE" in err_str
+                  or "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str):
                 last_error = e
                 wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
                 print(f"Groq API error ({e}) on model {model} — retrying in {wait}s (attempt {attempt+1}/{retries})")
@@ -416,3 +429,141 @@ def _call_groq(system_prompt, user_prompt, api_key, retries=4, model="openai/gpt
                 raise Exception(f"Groq API error: {e}")
 
     raise Exception(f"Groq API unavailable/failed after {retries} retries. Last error: {last_error}")
+
+
+def _call_provider(provider, system_prompt, user_prompt, api_key):
+    """Dispatch a generation call to the chosen provider's SDK."""
+    if provider == "openai":
+        return _call_openai(system_prompt, user_prompt, api_key)
+    elif provider == "anthropic":
+        return _call_anthropic(system_prompt, user_prompt, api_key)
+    return _call_groq(system_prompt, user_prompt, api_key)
+
+
+def _call_openai(system_prompt, user_prompt, api_key, retries=4, model="gpt-5-nano"):
+    """
+    Call the OpenAI API and parse the JSON response via Structured Outputs.
+    Retries on rate limits or service unavailable.
+    """
+    client = OpenAI(api_key=api_key)
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
+
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt + seed_note}
+                ],
+                temperature=0.9,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "email",
+                        "strict": True,
+                        "schema": {
+                            "type": "object",
+                            "properties": {
+                                "subject": {"type": "string"},
+                                "body": {"type": "string"}
+                            },
+                            "required": ["subject", "body"],
+                            "additionalProperties": False
+                        }
+                    }
+                }
+            )
+
+            text = response.choices[0].message.content.strip()
+            result = json.loads(text)
+
+            if "subject" not in result or "body" not in result:
+                raise ValueError("Response missing 'subject' or 'body' keys")
+
+            return result
+
+        except (json.JSONDecodeError, ValueError) as e:
+            last_error = e
+            if attempt < retries - 1:
+                continue
+            raise Exception(f"Failed to parse OpenAI response after {retries} attempts: {e}")
+
+        except Exception as e:
+            err_str = str(e).upper()
+            if "429" in err_str or "RATE_LIMIT" in err_str or "503" in err_str or "UNAVAILABLE" in err_str:
+                last_error = e
+                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
+                print(f"OpenAI API error ({e}) — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+            else:
+                raise Exception(f"OpenAI API error: {e}")
+
+    raise Exception(f"OpenAI API unavailable/failed after {retries} retries. Last error: {last_error}")
+
+
+def _call_anthropic(system_prompt, user_prompt, api_key, retries=4, model="claude-haiku-4-5"):
+    """
+    Call the Anthropic API and parse the JSON response via a forced tool call.
+    Retries on rate limits or service unavailable.
+    """
+    client = anthropic.Anthropic(api_key=api_key)
+
+    write_email_tool = {
+        "name": "write_email",
+        "description": "Return the generated email's subject line and body.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subject": {"type": "string"},
+                "body": {"type": "string"}
+            },
+            "required": ["subject", "body"]
+        },
+        "strict": True
+    }
+
+    last_error = None
+    for attempt in range(retries):
+        try:
+            seed_note = f"\n[Variation seed: {random.randint(1000, 9999)}]"
+
+            response = client.messages.create(
+                model=model,
+                max_tokens=2000,
+                temperature=0.9,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt + seed_note}],
+                tools=[write_email_tool],
+                tool_choice={"type": "tool", "name": "write_email"}
+            )
+
+            tool_use = next((b for b in response.content if b.type == "tool_use"), None)
+            if tool_use is None:
+                raise ValueError("No tool_use block in Anthropic response")
+
+            result = tool_use.input
+            if "subject" not in result or "body" not in result:
+                raise ValueError("Response missing 'subject' or 'body' keys")
+
+            return result
+
+        except ValueError as e:
+            last_error = e
+            if attempt < retries - 1:
+                continue
+            raise Exception(f"Failed to parse Anthropic response after {retries} attempts: {e}")
+
+        except Exception as e:
+            err_str = str(e).upper()
+            if "429" in err_str or "RATE_LIMIT" in err_str or "OVERLOADED" in err_str or "503" in err_str:
+                last_error = e
+                wait = 5 * (2 ** attempt)  # 5s, 10s, 20s, 40s
+                print(f"Anthropic API error ({e}) — retrying in {wait}s (attempt {attempt+1}/{retries})")
+                time.sleep(wait)
+            else:
+                raise Exception(f"Anthropic API error: {e}")
+
+    raise Exception(f"Anthropic API unavailable/failed after {retries} retries. Last error: {last_error}")
