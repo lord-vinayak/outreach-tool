@@ -1,6 +1,8 @@
 flask
 flask-cors
 groq
+openai
+anthropic
 pdfplumber
 duckduckgo-search
 apscheduler
