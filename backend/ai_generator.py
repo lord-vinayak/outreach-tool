@@ -458,7 +458,11 @@ def _call_openai(system_prompt, user_prompt, api_key, retries=4, model="gpt-5-na
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt + seed_note}
                 ],
-                temperature=0.9,
+                # gpt-5-nano is a reasoning model: it rejects any temperature other than
+                # the default (1), and burns hidden reasoning tokens before the visible
+                # answer — reasoning_effort + a generous token budget avoid truncation.
+                reasoning_effort="low",
+                max_completion_tokens=8000,
                 response_format={
                     "type": "json_schema",
                     "json_schema": {
@@ -520,7 +524,8 @@ def _call_anthropic(system_prompt, user_prompt, api_key, retries=4, model="claud
                 "subject": {"type": "string"},
                 "body": {"type": "string"}
             },
-            "required": ["subject", "body"]
+            "required": ["subject", "body"],
+            "additionalProperties": False
         },
         "strict": True
     }
@@ -533,7 +538,7 @@ def _call_anthropic(system_prompt, user_prompt, api_key, retries=4, model="claud
             response = client.messages.create(
                 model=model,
                 max_tokens=2000,
-                temperature=0.9,
+                # temperature isn't a valid Messages API param on this SDK version.
                 system=system_prompt,
                 messages=[{"role": "user", "content": user_prompt + seed_note}],
                 tools=[write_email_tool],

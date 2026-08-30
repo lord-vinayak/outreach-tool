@@ -1,7 +1,7 @@
 flask
 flask-cors
 groq
-openai
+openai>=2.0
 anthropic
 pdfplumber
 duckduckgo-search
