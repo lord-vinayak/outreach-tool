@@ -221,6 +221,8 @@ def get_settings():
         "has_groq_key": bool(config.get("groq_api_key", "")),
         "groq_api_key_2": config.get("groq_api_key_2", ""),
         "groq_api_key_3": config.get("groq_api_key_3", ""),
+        "has_openai_key": bool(config.get("openai_api_key", "")),
+        "has_anthropic_key": bool(config.get("anthropic_api_key", "")),
         "send_delay_seconds": config.get("send_delay_seconds", 60),
         "is_complete": is_settings_complete(config),
     })
@@ -244,6 +246,10 @@ def save_settings():
         config["groq_api_key_2"] = data["groq_api_key_2"]
     if "groq_api_key_3" in data:
         config["groq_api_key_3"] = data["groq_api_key_3"]
+    if "openai_api_key" in data and data["openai_api_key"]:
+        config["openai_api_key"] = data["openai_api_key"]
+    if "anthropic_api_key" in data and data["anthropic_api_key"]:
+        config["anthropic_api_key"] = data["anthropic_api_key"]
     if "send_delay_seconds" in data:
         delay = int(data["send_delay_seconds"])
         config["send_delay_seconds"] = max(20, min(90, delay))
@@ -355,12 +361,23 @@ def create_campaign():
 @app.route("/api/campaign/<int:campaign_id>/generate", methods=["POST"])
 def generate_campaign_emails(campaign_id):
     config = load_config()
-    
-    # Validate at least one Groq key exists
+
+    # Company-name resolution always runs on Groq, regardless of provider.
     primary_key = config.get("groq_api_key", "").strip()
     if not primary_key:
         return jsonify({"error": "Groq API key not configured. Go to Settings."}), 400
-    
+
+    data = request.get_json(silent=True) or {}
+    provider = data.get("provider", "groq")
+    if provider not in ("groq", "openai", "anthropic"):
+        return jsonify({"error": f"Unknown provider: {provider}"}), 400
+
+    provider_api_key = None
+    if provider != "groq":
+        provider_api_key = config.get(f"{provider}_api_key", "").strip()
+        if not provider_api_key:
+            return jsonify({"error": f"{provider.capitalize()} API key not configured. Go to Settings."}), 400
+
     campaign = query_db("SELECT * FROM campaigns WHERE id = ?", (campaign_id,), one=True)
     if not campaign:
         return jsonify({"error": "Campaign not found"}), 404
@@ -394,29 +411,34 @@ def generate_campaign_emails(campaign_id):
     # Start parallel generation in background thread
     thread = threading.Thread(
         target=_generate_emails_parallel,
-        args=(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle),
+        args=(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle, provider, provider_api_key),
         daemon=True
     )
     thread.start()
-    
+
     return jsonify({
         "message": "Generation started",
         "total": len(recipients)
     })
 
-def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle):
+def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume_parsed, key_cycle,
+                               provider="groq", provider_api_key=None):
     """
     Background function: generates emails for all recipients in parallel
     using ThreadPoolExecutor. Each worker picks the next key from the
-    round-robin cycle in a thread-safe manner.
+    round-robin cycle in a thread-safe manner. Company-name resolution always
+    draws a Groq key from the cycle regardless of `provider`.
     """
     progress = generation_progress[campaign_id]
-    
+
     num_workers = min(len(recipients), 10)
-    
+
     def generate_one(r):
         """Generate email for a single recipient. Returns (recipient_id, result_or_error)."""
-        api_key = get_next_groq_key(key_cycle)
+        if provider == "groq":
+            api_key, groq_api_key = get_next_groq_key(key_cycle), None
+        else:
+            api_key, groq_api_key = provider_api_key, get_next_groq_key(key_cycle)
         try:
             result = generate_email(
                 profile=profile,
@@ -424,7 +446,9 @@ def _generate_emails_parallel(campaign_id, recipients, campaign, profile, resume
                 campaign_goal=campaign["goal"],
                 additional_context=campaign.get("additional_context", ""),
                 api_key=api_key,
-                resume_parsed=resume_parsed
+                resume_parsed=resume_parsed,
+                provider=provider,
+                groq_api_key=groq_api_key
             )
             return r["id"], r["email"], result, None
         except Exception as e:
@@ -775,6 +799,15 @@ def generate_followups(campaign_id):
     data = request.json or {}
     global_context = data.get("global_context", "")
     recipient_ids = data.get("recipient_ids")
+    provider = data.get("provider", "groq")
+    if provider not in ("groq", "openai", "anthropic"):
+        return jsonify({"error": f"Unknown provider: {provider}"}), 400
+
+    provider_api_key = None
+    if provider != "groq":
+        provider_api_key = config.get(f"{provider}_api_key", "").strip()
+        if not provider_api_key:
+            return jsonify({"error": f"{provider.capitalize()} API key not configured. Go to Settings."}), 400
 
     progress_key = f"{campaign_id}_followup"
 
@@ -810,7 +843,8 @@ def generate_followups(campaign_id):
 
     thread = threading.Thread(
         target=_generate_followups_parallel,
-        args=(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context, progress_key),
+        args=(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context, progress_key,
+              provider, provider_api_key),
         daemon=True
     )
     thread.start()
@@ -820,12 +854,16 @@ def generate_followups(campaign_id):
         "total": len(recipients)
     })
 
-def _generate_followups_parallel(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context, progress_key):
+def _generate_followups_parallel(campaign_id, recipients, profile, resume_parsed, key_cycle, global_context,
+                                  progress_key, provider="groq", provider_api_key=None):
     progress = generation_progress[progress_key]
     num_workers = min(len(recipients), 10)
-    
+
     def generate_one(r):
-        api_key = get_next_groq_key(key_cycle)
+        if provider == "groq":
+            api_key, groq_api_key = get_next_groq_key(key_cycle), None
+        else:
+            api_key, groq_api_key = provider_api_key, get_next_groq_key(key_cycle)
         try:
             result = generate_contextual_followup(
                 profile=profile,
@@ -838,7 +876,9 @@ def _generate_followups_parallel(campaign_id, recipients, profile, resume_parsed
                 check_back_date=r["check_back_date"],
                 global_context=global_context,
                 api_key=api_key,
-                resume_parsed=resume_parsed
+                resume_parsed=resume_parsed,
+                provider=provider,
+                groq_api_key=groq_api_key
             )
             return r["id"], r["email"], result, None
         except Exception as e:
